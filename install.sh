@@ -19,8 +19,8 @@ fi
 ln -sfn "$SOURCE" "$TARGET"
 echo "[OK] Linked $TARGET → $SOURCE"
 
-# 3. Ensure matrix-bar.sh is executable
-chmod +x "$REPO_DIR/bin/matrix-bar.sh"
+# 3. Ensure bin scripts are executable
+chmod +x "$REPO_DIR"/bin/*.sh
 
 # 4. Clone TPM if missing
 if [ ! -d "$TPM_DIR" ]; then
