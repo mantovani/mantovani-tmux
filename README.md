@@ -60,19 +60,28 @@ of `tmux.conf`, so anything set there overrides the defaults. The file is
 
 ### Example: pink theme on a desktop
 
-`~/.tmux.local.conf`:
+`~/.tmux.local.conf` — three lines:
 ```tmux
 set -g status-style "bg=#ff69b4,fg=black"
-set -g status-left-style "bg=#ff69b4,fg=black"
-set -g status-right-style "bg=#ff69b4,fg=black"
 set -g window-status-style "bg=#ff69b4,fg=black"
 set -g window-status-current-style "bg=#d63384,fg=white,bold"
-set -g status-left "#[bg=#000000,fg=#DC143C,bold] 🧛 AI Vampire #[bg=#ff69b4,fg=black] "
 ```
 
 Reload with `C-a` then `:source ~/.tmux.conf` (or `tmux source ~/.tmux.conf`
-from any shell). The matrix-green right side stays the same against its own
-black background; only the vampire/windows region picks up the new colour.
+from any shell). The matrix-green right side and the vampire badge both keep
+their own embedded backgrounds; only the empty bar background and the
+window-list cells pick up the new colour.
+
+> **Pitfall — do not add these:**
+> ```tmux
+> set -g status-left-style  …    # changes left/right region geometry — right metrics collapse leftward
+> set -g status-right-style …    # same
+> set -g status-left "…"          # unnecessary; status-left already paints its own bg
+> ```
+> The base `tmux.conf` does set all five styles, but only because they share
+> the same dark-red bg — that's the special case where the geometry works
+> out. In an override they're almost always a different colour from
+> `status-style`, which is exactly when tmux collapses the right region.
 
 To re-style the right side too, redefine `status-right` in the local file
 (copy from `tmux.conf:26` and tweak the colour values).
