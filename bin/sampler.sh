@@ -48,32 +48,33 @@ _linux_cpu_snapshot() {
   }' /proc/stat
 }
 
+# Sets the global CPU. Must NOT be called via $(...) — the Linux branch keeps
+# delta state in globals (_PREV_CPU_{IDLE,TOTAL}) that a subshell would discard.
 read_cpu() {
   case "$OS" in
     Darwin)
       # macOS 26 (Tahoe) removed sysctl kern.cp_time. iostat -c does its own
       # 1-second internal delta; the second (tail) row is the real sample.
       # Cost ~1 s per call — fine in the background sampler.
-      iostat -c 2 -w 1 -n 0 2>/dev/null | tail -1 | awk '{
+      CPU=$(iostat -c 2 -w 1 -n 0 2>/dev/null | tail -1 | awk '{
         c = 100 - $3
         if (c < 0)   c = 0
         if (c > 100) c = 100
         printf "%d", c
-      }'
+      }')
       ;;
     Linux)
-      local idle total d_idle d_total cpu
+      local idle total d_idle d_total
       read idle total < <(_linux_cpu_snapshot)
       : "${idle:=0}" "${total:=0}"
       d_idle=$(( idle - _PREV_CPU_IDLE ))
       d_total=$(( total - _PREV_CPU_TOTAL ))
       _PREV_CPU_IDLE=$idle
       _PREV_CPU_TOTAL=$total
-      if (( d_total <= 0 )); then echo 0; return; fi
-      cpu=$(( 100 - (d_idle * 100 / d_total) ))
-      (( cpu < 0 )) && cpu=0
-      (( cpu > 100 )) && cpu=100
-      echo "$cpu"
+      if (( d_total <= 0 )); then CPU=0; return; fi
+      CPU=$(( 100 - (d_idle * 100 / d_total) ))
+      (( CPU < 0 )) && CPU=0
+      (( CPU > 100 )) && CPU=100
       ;;
   esac
 }
@@ -126,7 +127,8 @@ read_bat() {
 prev_t=$(date +%s)
 read prev_ib prev_ob <<< "$(read_net_bytes)"
 # Prime Linux's delta counters (Darwin's iostat is self-priming)
-[ "$OS" = "Linux" ] && read_cpu >/dev/null
+CPU=0
+[ "$OS" = "Linux" ] && read_cpu
 
 while :; do
   sleep "$INTERVAL"
@@ -137,7 +139,7 @@ while :; do
   net_out=$(( (ob - prev_ob) / dt )); (( net_out < 0 )) && net_out=0
   prev_ib=$ib; prev_ob=$ob; prev_t=$now
 
-  cpu=$(read_cpu); cpu=${cpu:-0}
+  read_cpu; cpu=${CPU:-0}
   mem=$(read_mem); mem=${mem:-0}
   bat=$(read_bat || true)
 
