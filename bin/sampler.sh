@@ -40,37 +40,42 @@ read_net_bytes() {
 _PREV_CPU_IDLE=0
 _PREV_CPU_TOTAL=0
 
-# Print "idle total" as cumulative tick counters since boot.
-_cpu_snapshot() {
-  case "$OS" in
-    Darwin)
-      # kern.cp_time: user nice sys intr idle (5 cumulative tick counters)
-      sysctl -n kern.cp_time 2>/dev/null | awk '{
-        print $5, $1+$2+$3+$4+$5
-      }'
-      ;;
-    Linux)
-      awk '/^cpu / {
-        t=0; for (i=2;i<=8;i++) t+=$i
-        print $5, t
-      }' /proc/stat
-      ;;
-  esac
+# Linux: cumulative "idle total" tick counters from /proc/stat.
+_linux_cpu_snapshot() {
+  awk '/^cpu / {
+    t=0; for (i=2;i<=8;i++) t+=$i
+    print $5, t
+  }' /proc/stat
 }
 
 read_cpu() {
-  local idle total d_idle d_total cpu
-  read idle total < <(_cpu_snapshot)
-  : "${idle:=0}" "${total:=0}"
-  d_idle=$(( idle - _PREV_CPU_IDLE ))
-  d_total=$(( total - _PREV_CPU_TOTAL ))
-  _PREV_CPU_IDLE=$idle
-  _PREV_CPU_TOTAL=$total
-  if (( d_total <= 0 )); then echo 0; return; fi
-  cpu=$(( 100 - (d_idle * 100 / d_total) ))
-  (( cpu < 0 )) && cpu=0
-  (( cpu > 100 )) && cpu=100
-  echo "$cpu"
+  case "$OS" in
+    Darwin)
+      # macOS 26 (Tahoe) removed sysctl kern.cp_time. iostat -c does its own
+      # 1-second internal delta; the second (tail) row is the real sample.
+      # Cost ~1 s per call — fine in the background sampler.
+      iostat -c 2 -w 1 -n 0 2>/dev/null | tail -1 | awk '{
+        c = 100 - $3
+        if (c < 0)   c = 0
+        if (c > 100) c = 100
+        printf "%d", c
+      }'
+      ;;
+    Linux)
+      local idle total d_idle d_total cpu
+      read idle total < <(_linux_cpu_snapshot)
+      : "${idle:=0}" "${total:=0}"
+      d_idle=$(( idle - _PREV_CPU_IDLE ))
+      d_total=$(( total - _PREV_CPU_TOTAL ))
+      _PREV_CPU_IDLE=$idle
+      _PREV_CPU_TOTAL=$total
+      if (( d_total <= 0 )); then echo 0; return; fi
+      cpu=$(( 100 - (d_idle * 100 / d_total) ))
+      (( cpu < 0 )) && cpu=0
+      (( cpu > 100 )) && cpu=100
+      echo "$cpu"
+      ;;
+  esac
 }
 
 read_mem() {
@@ -120,7 +125,8 @@ read_bat() {
 # Baseline so the first delta isn't a huge spike
 prev_t=$(date +%s)
 read prev_ib prev_ob <<< "$(read_net_bytes)"
-read_cpu >/dev/null  # prime _PREV_CPU_{IDLE,TOTAL}
+# Prime Linux's delta counters (Darwin's iostat is self-priming)
+[ "$OS" = "Linux" ] && read_cpu >/dev/null
 
 while :; do
   sleep "$INTERVAL"
