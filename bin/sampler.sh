@@ -37,6 +37,9 @@ read_net_bytes() {
   esac
 }
 
+_PREV_CPU_IDLE=0
+_PREV_CPU_TOTAL=0
+
 read_cpu() {
   case "$OS" in
     Darwin)
@@ -45,12 +48,20 @@ read_cpu() {
       }'
       ;;
     Linux)
-      awk '/^cpu / {
-        idle=$5; total=0
-        for (i=2;i<=8;i++) total+=$i
-        if (total==0) {print 0; exit}
-        printf "%d", 100 - (idle*100/total)
-      }' /proc/stat
+      local idle total d_idle d_total cpu
+      read idle total < <(awk '/^cpu / {
+        t=0; for (i=2;i<=8;i++) t+=$i
+        print $5, t
+      }' /proc/stat)
+      d_idle=$(( idle - _PREV_CPU_IDLE ))
+      d_total=$(( total - _PREV_CPU_TOTAL ))
+      _PREV_CPU_IDLE=$idle
+      _PREV_CPU_TOTAL=$total
+      if (( d_total <= 0 )); then echo 0; return; fi
+      cpu=$(( 100 - (d_idle * 100 / d_total) ))
+      (( cpu < 0 )) && cpu=0
+      (( cpu > 100 )) && cpu=100
+      echo "$cpu"
       ;;
   esac
 }
@@ -102,6 +113,7 @@ read_bat() {
 # Baseline so the first delta isn't a huge spike
 prev_t=$(date +%s)
 read prev_ib prev_ob <<< "$(read_net_bytes)"
+read_cpu >/dev/null  # prime _PREV_CPU_{IDLE,TOTAL}
 
 while :; do
   sleep "$INTERVAL"
