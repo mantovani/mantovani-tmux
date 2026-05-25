@@ -40,6 +40,17 @@ config if tmux is running.
 > **Path note:** `tmux.conf` hardcodes the repo at `~/projects/github/mantovani-tmux`.
 > If you clone elsewhere, symlink: `ln -s /your/path ~/projects/github/mantovani-tmux`.
 
+## Update
+
+```bash
+~/projects/github/mantovani-tmux/update.sh
+```
+
+`update.sh` is also idempotent: fast-forwards from origin, kills the running
+sampler so the new code is loaded, re-runs `install.sh` (which sources tmux and
+respawns the sampler via `run-shell -b`), then verifies the new sampler is alive
+and writing to the cache.
+
 ## Per-machine theming
 
 The repo ships the blood-red vampire theme. To use a different colour scheme on
