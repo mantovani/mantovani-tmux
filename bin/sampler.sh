@@ -40,30 +40,37 @@ read_net_bytes() {
 _PREV_CPU_IDLE=0
 _PREV_CPU_TOTAL=0
 
-read_cpu() {
+# Print "idle total" as cumulative tick counters since boot.
+_cpu_snapshot() {
   case "$OS" in
     Darwin)
-      top -l1 -n0 2>/dev/null | awk '/CPU usage/ {
-        gsub("%",""); printf "%d", $3+$5
+      # kern.cp_time: user nice sys intr idle (5 cumulative tick counters)
+      sysctl -n kern.cp_time 2>/dev/null | awk '{
+        print $5, $1+$2+$3+$4+$5
       }'
       ;;
     Linux)
-      local idle total d_idle d_total cpu
-      read idle total < <(awk '/^cpu / {
+      awk '/^cpu / {
         t=0; for (i=2;i<=8;i++) t+=$i
         print $5, t
-      }' /proc/stat)
-      d_idle=$(( idle - _PREV_CPU_IDLE ))
-      d_total=$(( total - _PREV_CPU_TOTAL ))
-      _PREV_CPU_IDLE=$idle
-      _PREV_CPU_TOTAL=$total
-      if (( d_total <= 0 )); then echo 0; return; fi
-      cpu=$(( 100 - (d_idle * 100 / d_total) ))
-      (( cpu < 0 )) && cpu=0
-      (( cpu > 100 )) && cpu=100
-      echo "$cpu"
+      }' /proc/stat
       ;;
   esac
+}
+
+read_cpu() {
+  local idle total d_idle d_total cpu
+  read idle total < <(_cpu_snapshot)
+  : "${idle:=0}" "${total:=0}"
+  d_idle=$(( idle - _PREV_CPU_IDLE ))
+  d_total=$(( total - _PREV_CPU_TOTAL ))
+  _PREV_CPU_IDLE=$idle
+  _PREV_CPU_TOTAL=$total
+  if (( d_total <= 0 )); then echo 0; return; fi
+  cpu=$(( 100 - (d_idle * 100 / d_total) ))
+  (( cpu < 0 )) && cpu=0
+  (( cpu > 100 )) && cpu=100
+  echo "$cpu"
 }
 
 read_mem() {
