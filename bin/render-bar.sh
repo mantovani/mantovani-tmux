@@ -4,7 +4,7 @@
 set -u
 
 METRIC="${1:-}"
-CACHE="/tmp/tmux-stats-${USER}"
+CACHE="/tmp/tmuxm-stats-${USER}"
 
 pct=0
 if [ -r "$CACHE" ]; then

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Updater for the mantovani-tmux config on this machine.
+# Updater for the tmuxm config on this machine.
 # Pulls latest from origin, kills the stale sampler, re-runs install.sh
 # (which sources tmux and spawns a fresh sampler), then verifies.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PIDFILE="/tmp/tmux-sampler-${USER}.pid"
-CACHE="/tmp/tmux-stats-${USER}"
+PIDFILE="/tmp/tmuxm-sampler-${USER}.pid"
+CACHE="/tmp/tmuxm-stats-${USER}"
 
 cd "$REPO_DIR"
 
@@ -35,9 +35,11 @@ if [ -r "$PIDFILE" ]; then
   fi
 fi
 
-# 3. Run installer: symlink, chmod, TPM, and `tmux source` which respawns
-#    the sampler via `run-shell -b` in tmux.conf.
-"$REPO_DIR/install.sh"
+# 3. Run installer: link ~/.tmuxm, symlink ~/.tmux.conf, chmod, TPM, and
+#    `tmux source` which respawns the sampler via `run-shell -b` in tmux.conf.
+#    Args are forwarded, so `update.sh --color blue` works. ${@+"$@"} keeps
+#    this safe under `set -u` on macOS stock bash 3.2 when there are no args.
+"$REPO_DIR/install.sh" ${@+"$@"}
 
 # 4. Verify the new sampler is alive and writing the cache.
 if tmux info &>/dev/null; then

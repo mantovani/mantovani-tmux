@@ -1,25 +1,29 @@
-# mantovani-tmux
+# tmuxm
 
-Personal tmux config. **AI Vampire** theme: blood-red status bar on the left,
-matrix-green live system metrics on the right. Cross-platform (macOS & Linux).
+Portable tmux config. **AI Vampire** theme: a fixed badge on the left, matrix-green
+live system metrics on the right, and a **window list in the middle that you colour
+differently on every machine** — so a glance at the bar tells you which box you're on.
+Cross-platform (macOS & Linux).
 
 ## What it looks like
 
 ```
  🧛 AI Vampire │ 1:zsh* 2:vim 3:logs           CPU █▁▁▁  23% │ MEM ███▂  79% │ ↓ 99.3K ↑  1.9K │ @host │ 25/05/2026 13:14
-└──── left ───┘└──── windows ─────┘           └────────────────── matrix-green metrics (black bg) ──────────────────┘
+└─ status-left ┘└─── window list ────┘         └──────────────────── status-right (metrics) ─────────────────────────┘
+    fixed             per-machine                                    fixed
 ```
 
-| Segment | Color | Notes |
+| Segment | Colour | Per-machine? |
 |---|---|---|
-| `🧛 AI Vampire` | crimson `#DC143C` on black bg | Themable (per-machine override) |
-| Windows | white on blood-red `#8B0000`; current window on bright `#DC143C` | Themable |
-| CPU/MEM bars | matrix-green `#00FF41`, escalates yellow `#FFFF00` → red `#FF0000` | Fixed-width `  0%` … `100%` |
-| Net throughput | matrix-green | Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
-| `@host` | brighter green `#39FF14`, bold | `#h` (short hostname) |
-| Date | matrix-green, bold | European format `dd/mm/yyyy hh:mm` |
+| `🧛 AI Vampire` badge | crimson `#DC143C` on black | **No** — same everywhere |
+| **Window list** | white on blood-red `#8B0000`; current window on `#DC143C` | **Yes — this is the machine colour** |
+| Bar background | blood-red `#8B0000` | **Yes** — matches the window list |
+| CPU/MEM bars | matrix-green `#00FF41` → yellow `#FFFF00` → red `#FF0000` | No. Fixed-width `  0%` … `100%` |
+| Net throughput | matrix-green | No. Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
+| `@host` | brighter green `#39FF14`, bold | No |
+| Date | matrix-green, bold | No. European `dd/mm/yyyy hh:mm` |
 
-Under load (color escalates, bars fill):
+Under load (colour escalates, bars fill):
 ```
  🧛 AI Vampire │ windows…           CPU ███▅  88% │ MEM ████  95% │ ↓18.4M ↑ 2.1M │ @host │ 25/05/2026 13:14
 ```
@@ -27,50 +31,94 @@ Under load (color escalates, bars fill):
 ## Install
 
 ```bash
-git clone git@github.com:mantovani/mantovani-tmux.git ~/projects/github/mantovani-tmux
-~/projects/github/mantovani-tmux/install.sh
-tmux                           # or reattach
+git clone git@github.com:mantovani/mantovani-tmux.git ~/.tmuxm
+~/.tmuxm/install.sh
+~/.tmuxm/install.sh --color blue    # give this machine its own colour
+tmux                                # or reattach
 # inside tmux: press C-a Shift+I to install TPM plugins
 ```
 
-`install.sh` is idempotent: backs up an existing `~/.tmux.conf`, symlinks the new
-one, clones [TPM](https://github.com/tmux-plugins/tpm) if missing, sources the
-config if tmux is running.
+**Clone wherever you like.** `tmux.conf` refers to `~/.tmuxm/bin/…`, and `install.sh`
+makes that path exist either way: if the clone *is* `~/.tmuxm` it does nothing, and
+otherwise it creates `~/.tmuxm` as a symlink to wherever you cloned. So this works
+just as well:
 
-> **Path note:** `tmux.conf` hardcodes the repo at `~/projects/github/mantovani-tmux`.
-> If you clone elsewhere, symlink: `ln -s /your/path ~/projects/github/mantovani-tmux`.
+```bash
+git clone git@github.com:mantovani/mantovani-tmux.git ~/projects/github/tmuxm
+~/projects/github/tmuxm/install.sh   # creates ~/.tmuxm -> ~/projects/github/tmuxm
+```
+
+`install.sh` is idempotent: links `~/.tmuxm`, backs up a pre-existing `~/.tmux.conf`
+and symlinks the new one, clones [TPM](https://github.com/tmux-plugins/tpm) if missing,
+sources the config if tmux is running. With no arguments it never touches
+`~/.tmux.local.conf`.
 
 ## Update
 
 ```bash
-~/projects/github/mantovani-tmux/update.sh
+~/.tmuxm/update.sh
 ```
 
-`update.sh` is also idempotent: fast-forwards from origin, kills the running
-sampler so the new code is loaded, re-runs `install.sh` (which sources tmux and
-respawns the sampler via `run-shell -b`), then verifies the new sampler is alive
-and writing to the cache.
+Fast-forwards from origin, kills the running sampler so the new code is loaded, re-runs
+`install.sh` (which sources tmux and respawns the sampler), then verifies the sampler is
+alive and writing the cache. Arguments are forwarded, so `update.sh --color green` works.
 
-## Per-machine theming
+`update.sh` never rewrites `~/.tmux.local.conf` on its own — see the pitfall below if
+you set this machine up before the `--color` flag existed.
 
-The repo ships the blood-red vampire theme. To use a different colour scheme on
-a specific machine, create `~/.tmux.local.conf`. It is sourced at the very end
-of `tmux.conf`, so anything set there overrides the defaults. The file is
-**git-ignored** so each machine carries its own.
+## Per-machine colour
 
-### Example: pink theme on a desktop
+This is the point of the middle region. Pick one colour per machine and keep it, and
+you'll never again run a command on the wrong box because two windows looked alike.
 
-`~/.tmux.local.conf` — three lines:
+```bash
+~/.tmuxm/install.sh --list-colors     # show the presets
+~/.tmuxm/install.sh --color pink      # apply one
+```
+
+| Preset | Bar + window list | Current window | Suggested for |
+|---|---|---|---|
+| `red` | `#8B0000` | `#DC143C` | the shipped default |
+| `pink` | `#ff69b4` | `#d63384` | personal desktop |
+| `blue` | `#1e3a8a` | `#3b82f6` | work laptop |
+| `green` | `#14532d` | `#22c55e` | dev / staging box |
+| `purple` | `#4c1d95` | `#8b5cf6` | secondary machine |
+| `amber` | `#92400e` | `#f59e0b` | **production — think before you type** |
+| `slate` | `#334155` | `#64748b` | anything neutral |
+
+Any hex works too. The active-window shade is derived automatically (lightened if your
+colour is dark, darkened if it's light) and the text colour is picked from the
+background's luminance, so it stays readable:
+
+```bash
+~/.tmuxm/install.sh --color '#3366cc'
+~/.tmuxm/install.sh --color '#3366cc' --color-current '#88aaff'   # or set it yourself
+```
+
+Reload with `tmux source ~/.tmux.conf` (or `C-a` then `:source ~/.tmux.conf`).
+
+### What it writes, and what it won't touch
+
+`--color` appends a marked block to `~/.tmux.local.conf`, which `tmux.conf` sources
+`-q` at the very end. The file is **git-ignored**, so each machine carries its own.
+
 ```tmux
+# >>> tmuxm colour (managed by install.sh --color) >>>
+# Machine accent: pink — regenerate with: ~/.tmuxm/install.sh --color pink
 set -g status-style "bg=#ff69b4,fg=black"
 set -g window-status-style "bg=#ff69b4,fg=black"
 set -g window-status-current-style "bg=#d63384,fg=white,bold"
+# <<< tmuxm colour <<<
 ```
 
-Reload with `C-a` then `:source ~/.tmux.conf` (or `tmux source ~/.tmux.conf`
-from any shell). The matrix-green right side and the vampire badge both keep
-their own embedded backgrounds; only the empty bar background and the
-window-list cells pick up the new colour.
+Re-running `--color` rewrites **only** that block. Everything else in the file is left
+alone — `~/.tmux.local.conf` is also where per-machine bits like the `xclip` copy-pipe
+bindings live, and those survive. If the file already existed without the markers, it's
+backed up to `~/.tmux.local.conf.bak.<timestamp>` before the block is appended.
+
+Three lines is the whole theme. That's deliberate: the badge and the metrics embed their
+own `#[bg=…]`, so they look identical on every machine — the constant frame is what makes
+the varying window colour easy to read at a glance.
 
 > **Pitfall — do not add these:**
 > ```tmux
@@ -78,13 +126,17 @@ window-list cells pick up the new colour.
 > set -g status-right-style …    # same
 > set -g status-left "…"          # unnecessary; status-left already paints its own bg
 > ```
-> The base `tmux.conf` does set all five styles, but only because they share
-> the same dark-red bg — that's the special case where the geometry works
-> out. In an override they're almost always a different colour from
-> `status-style`, which is exactly when tmux collapses the right region.
+> The base `tmux.conf` does set all five styles, but only because they share the same
+> dark-red bg — that's the special case where the geometry works out. In an override
+> they're almost always a different colour from `status-style`, which is exactly when
+> tmux collapses the right region.
+>
+> **Machines set up before `--color` existed** may still carry a six-line override with
+> these in it. `install.sh` prints the offending line numbers on every run but never
+> edits your file — delete them by hand, then re-run `--color`.
 
-To re-style the right side too, redefine `status-right` in the local file
-(copy from `tmux.conf:26` and tweak the colour values).
+To re-style the right-hand metrics too, redefine `status-right` in your local file —
+copy it out of the *Status bar* section of `tmux.conf` and change the colour values.
 
 ## Architecture
 
@@ -93,14 +145,14 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 ```
                     once per machine, pidfile-guarded
                                 │
-            ┌───────────────────▼─────────────────┐
-            │ bin/sampler.sh                      │
-            │ samples cpu/mem/bat/net every 2 s   │
-            │ writes /tmp/tmux-stats-$USER (50 B) │
-            └───────────────────┬─────────────────┘
+            ┌───────────────────▼──────────────────┐
+            │ bin/sampler.sh                       │
+            │ samples cpu/mem/bat/net every 2 s    │
+            │ writes /tmp/tmuxm-stats-$USER (50 B) │
+            └───────────────────┬──────────────────┘
                                 │ atomic rename
                                 ▼
-              /tmp/tmux-stats-$USER  (key = value, 5 lines)
+              /tmp/tmuxm-stats-$USER  (key = value, 5 lines)
                                 │
             ┌───────────────────┴────────────────┐
             │                                    │
@@ -113,27 +165,30 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 ```
 
 - **One sampler per user**, no matter how many tmux servers/sessions/clients.
-  Pidfile at `/tmp/tmux-sampler-$USER.pid` is checked on each launch; if the
-  recorded PID is alive (`kill -0` succeeds), the new instance exits immediately.
-- **Atomic writes** — the sampler writes to `$CACHE.tmp` and renames, so renderers
-  always read a consistent file.
+  Pidfile at `/tmp/tmuxm-sampler-$USER.pid` is checked on each launch; if the recorded
+  PID is alive (`kill -0` succeeds), the new instance exits immediately.
+- **Atomic writes** — the sampler writes to `$CACHE.tmp` and renames, so renderers always
+  read a consistent file.
 - **Cross-platform** — `sampler.sh` branches on `uname -s`:
-  - Darwin: `top -l1`, `vm_stat`, `pmset -g batt`, `netstat -ibn`
+  - Darwin: `iostat -c` (CPU), `vm_stat`, `pmset -g batt`, `netstat -ibn`
   - Linux: `/proc/stat`, `/proc/meminfo`, `/sys/class/power_supply/BAT*`, `/proc/net/dev`
-- **Fixed-width renders** — bars are always 4 chars + ` 999%` (9 chars total),
-  throughput is always 6 chars. The status bar never jitters.
+- **Fixed-width renders** — bars are always 4 chars + ` 999%` (9 chars total), throughput
+  is always 6 chars. The status bar never jitters.
+- **The bin scripts are location-independent** — they only read and write `/tmp`, so the
+  only thing tying the config to a directory is `~/.tmuxm`.
 
 ## File locations
 
 | Path | Purpose |
 |---|---|
-| `~/projects/github/mantovani-tmux/` | This repo (recommended clone location) |
-| `~/.tmux.conf` | Symlink → `tmux.conf` in repo (created by `install.sh`) |
-| `~/.tmux.conf.bak.<timestamp>` | Backup of pre-install `~/.tmux.conf` |
-| `~/.tmux.local.conf` | **Per-machine overrides** — not tracked in git |
+| `~/.tmuxm` | The clone, or a symlink to it (created by `install.sh`) |
+| `~/.tmux.conf` | Symlink → `~/.tmuxm/tmux.conf` |
+| `~/.tmux.conf.bak.<timestamp>` | Backup of a pre-existing `~/.tmux.conf` |
+| `~/.tmux.local.conf` | **Per-machine colour + overrides** — not tracked in git |
+| `~/.tmux.local.conf.bak.<timestamp>` | Backup made the first time `--color` touches an existing file |
 | `~/.tmux/plugins/tpm/` | TPM (cloned by `install.sh`) |
-| `/tmp/tmux-stats-$USER` | Sampler cache (~50 bytes, 5 lines) |
-| `/tmp/tmux-sampler-$USER.pid` | Sampler pidfile |
+| `/tmp/tmuxm-stats-$USER` | Sampler cache (~50 bytes, 5 lines) |
+| `/tmp/tmuxm-sampler-$USER.pid` | Sampler pidfile |
 
 ## Requirements
 
@@ -142,12 +197,13 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 | `tmux` | ≥ 2.1 | for `run-shell -b` |
 | `bash` | ≥ 3.2 | macOS stock bash is fine |
 | `git` | any | for the TPM clone |
-| macOS tools | `top`, `vm_stat`, `pmset`, `netstat` | all preinstalled |
+| macOS tools | `iostat`, `vm_stat`, `pmset`, `netstat` | all preinstalled |
 | Linux tools | `awk`, `cat`, `/proc`, optional `/sys/class/power_supply/` | preinstalled on any distro |
+| `xclip` / `pbcopy` | optional | only if you add clipboard bindings to `~/.tmux.local.conf` |
 | Terminal | UTF-8, supports `▁▂▃▄▅▆▇█`, emoji | iTerm2 / WezTerm / Ghostty / Kitty / Alacritty / GNOME Terminal all fine |
 
-Battery line is omitted automatically if `/sys/class/power_supply/BAT*` doesn't
-exist (desktops, VMs).
+Battery is omitted automatically if `/sys/class/power_supply/BAT*` doesn't exist
+(desktops, VMs).
 
 ## Resource usage
 
@@ -167,16 +223,21 @@ Steady-state on macOS (measured):
 |---|---|
 | `C-a` | Prefix (remapped from `C-b`) |
 | `C-a` `C-a` | Send literal `C-a` |
-| Mouse | Enabled (scroll, resize, click panes) |
+| Mouse | Enabled (scroll, resize, click panes, drag-select) |
+| `C-a` `[` | Copy mode — **vi keys** (`mode-keys vi`) |
 | `C-a` `Shift+I` | TPM: install plugins from `@plugin` declarations |
 | `C-a` `Shift+U` | TPM: update plugins |
+
+`mode-keys vi` is set so `copy-mode-vi` bindings work; the actual clipboard bind (`y` →
+`xclip`/`pbcopy`) is per-machine and belongs in `~/.tmux.local.conf`.
 
 ## Layout
 
 ```
-mantovani-tmux/
+tmuxm/
 ├── tmux.conf              # main config — symlinked to ~/.tmux.conf
-├── install.sh             # idempotent installer
+├── install.sh             # idempotent installer + --color
+├── update.sh              # pull, restart sampler, verify
 ├── bin/
 │   ├── sampler.sh         # background daemon, writes cache
 │   ├── render-bar.sh      # cpu/mem/bat → matrix bar

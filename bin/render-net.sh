@@ -3,7 +3,7 @@
 set -u
 
 DIR="${1:-}"
-CACHE="/tmp/tmux-stats-${USER}"
+CACHE="/tmp/tmuxm-stats-${USER}"
 KEY="net_${DIR}"
 
 bps=0

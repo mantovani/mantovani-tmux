@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Long-lived stats sampler for the tmux status bar.
 # Samples cpu/mem/bat/net every INTERVAL seconds and atomically writes to
-# /tmp/tmux-stats-$USER. Pidfile-guarded: only one sampler per user even
+# /tmp/tmuxm-stats-$USER. Pidfile-guarded: only one sampler per user even
 # with multiple tmux servers attached.
 set -u
 
 INTERVAL=2
-CACHE="/tmp/tmux-stats-${USER}"
-PIDFILE="/tmp/tmux-sampler-${USER}.pid"
+CACHE="/tmp/tmuxm-stats-${USER}"
+PIDFILE="/tmp/tmuxm-sampler-${USER}.pid"
 OS="$(uname -s)"
 
 # Single-instance guard
