@@ -1,6 +1,6 @@
 # tmuxm
 
-Portable tmux config. **AI Vampire** theme: a fixed badge on the left, matrix-green
+Portable tmux config. **AI Wizard** theme: a fixed badge on the left, arcane-violet
 live system metrics on the right, and a **window list in the middle that you colour
 differently on every machine** — so a glance at the bar tells you which box you're on.
 Cross-platform (macOS & Linux).
@@ -8,24 +8,24 @@ Cross-platform (macOS & Linux).
 ## What it looks like
 
 ```
- 🧛 AI Vampire │ 1:zsh* 2:vim 3:logs           CPU █▁▁▁  23% │ MEM ███▂  79% │ ↓ 99.3K ↑  1.9K │ @host │ 25/05/2026 13:14
-└─ status-left ┘└─── window list ────┘         └──────────────────── status-right (metrics) ─────────────────────────┘
-    fixed             per-machine                                    fixed
+ 🧙 AI Wizard 🔮 │ 1:zsh* 2:vim 3:logs           CPU █▁▁▁  23% │ MEM ███▂  79% │ ↓ 99.3K ↑  1.9K │ @host │ 25/05/2026 13:14
+└── status-left ─┘└─── window list ────┘         └──────────────────── status-right (metrics) ─────────────────────────┘
+      fixed             per-machine                                    fixed
 ```
 
 | Segment | Colour | Per-machine? |
 |---|---|---|
-| `🧛 AI Vampire` badge | crimson `#DC143C` on black | **No** — same everywhere |
-| **Window list** | white on blood-red `#8B0000`; current window on `#DC143C` | **Yes — this is the machine colour** |
-| Bar background | blood-red `#8B0000` | **Yes** — matches the window list |
-| CPU/MEM bars | matrix-green `#00FF41` → yellow `#FFFF00` → red `#FF0000` | No. Fixed-width `  0%` … `100%` |
-| Net throughput | matrix-green | No. Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
-| `@host` | brighter green `#39FF14`, bold | No |
-| Date | matrix-green, bold | No. European `dd/mm/yyyy hh:mm` |
+| `🧙 AI Wizard 🔮` badge | gold `#FBBF24` on black | **No** — same everywhere |
+| **Window list** | white on deep violet `#4c1d95`; current window on `#8b5cf6` | **Yes — this is the machine colour** |
+| Bar background | deep violet `#4c1d95` | **Yes** — matches the window list |
+| CPU/MEM bars | arcane violet `#A78BFA` → gold `#FBBF24` → red `#FF0000` | No. Fixed-width `  0%` … `100%` |
+| Net throughput | arcane violet | No. Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
+| `@host` | pale violet `#C4B5FD`, bold | No |
+| Date | arcane violet, bold | No. European `dd/mm/yyyy hh:mm` |
 
 Under load (colour escalates, bars fill):
 ```
- 🧛 AI Vampire │ windows…           CPU ███▅  88% │ MEM ████  95% │ ↓18.4M ↑ 2.1M │ @host │ 25/05/2026 13:14
+ 🧙 AI Wizard 🔮 │ windows…           CPU ███▅  88% │ MEM ████  95% │ ↓18.4M ↑ 2.1M │ @host │ 25/05/2026 13:14
 ```
 
 ## Install
@@ -78,11 +78,11 @@ you'll never again run a command on the wrong box because two windows looked ali
 
 | Preset | Bar + window list | Current window | Suggested for |
 |---|---|---|---|
-| `red` | `#8B0000` | `#DC143C` | the shipped default |
+| `red` | `#8B0000` | `#DC143C` | secondary machine |
 | `pink` | `#ff69b4` | `#d63384` | personal desktop |
 | `blue` | `#1e3a8a` | `#3b82f6` | work laptop |
 | `green` | `#14532d` | `#22c55e` | dev / staging box |
-| `purple` | `#4c1d95` | `#8b5cf6` | secondary machine |
+| `purple` | `#4c1d95` | `#8b5cf6` | the shipped default |
 | `amber` | `#92400e` | `#f59e0b` | **production — think before you type** |
 | `slate` | `#334155` | `#64748b` | anything neutral |
 
@@ -240,7 +240,7 @@ tmuxm/
 ├── update.sh              # pull, restart sampler, verify
 ├── bin/
 │   ├── sampler.sh         # background daemon, writes cache
-│   ├── render-bar.sh      # cpu/mem/bat → matrix bar
+│   ├── render-bar.sh      # cpu/mem/bat → arcane bar
 │   └── render-net.sh      # net throughput → fixed-width string
 ├── .gitignore
 └── README.md

@@ -31,11 +31,11 @@ COLOR_NAME=""
 # name|bar background|active window|note
 presets() {
   cat <<'EOF'
-red|#8B0000|#DC143C|shipped default (AI Vampire)
+red|#8B0000|#DC143C|
 pink|#ff69b4|#d63384|
 blue|#1e3a8a|#3b82f6|
 green|#14532d|#22c55e|
-purple|#4c1d95|#8b5cf6|
+purple|#4c1d95|#8b5cf6|shipped default (AI Wizard)
 amber|#92400e|#f59e0b|
 slate|#334155|#64748b|
 EOF
@@ -183,7 +183,7 @@ warn_conflicts() {
   echo
   echo "[!!] $LOCAL_CONF sets options that collapse the right-hand metrics:"
   printf '%s\n' "$hits" | sed 's/^/       /'
-  echo "     Delete those lines. The vampire badge and the matrix metrics paint"
+  echo "     Delete those lines. The wizard badge and the arcane metrics paint"
   echo "     their own backgrounds, so an override never needs to touch them."
   echo
 }
