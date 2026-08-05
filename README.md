@@ -1,8 +1,8 @@
 # tmuxm
 
-Portable tmux config. **AI Wizard** theme: a fixed badge on the left, arcane-violet
-live system metrics on the right, and a **window list in the middle that you colour
-differently on every machine** — so a glance at the bar tells you which box you're on.
+Portable tmux config. **AI Wizard** theme: a badge on the left, live system metrics on
+the right, and **one colour per machine running through all of it** — so a glance at the
+bar tells you which box you're on. Every machine picks its own colour on first install.
 Cross-platform (macOS & Linux).
 
 ## What it looks like
@@ -10,20 +10,27 @@ Cross-platform (macOS & Linux).
 ```
  🧙 AI Wizard 🔮 │ 1:zsh* 2:vim 3:logs           CPU █▁▁▁  23% │ MEM ███▂  79% │ ↓ 99.3K ↑  1.9K │ @host │ 25/05/2026 13:14
 └── status-left ─┘└─── window list ────┘         └──────────────────── status-right (metrics) ─────────────────────────┘
-      fixed             per-machine                                    fixed
+   black end-cap      machine colour                          black end-cap, machine colour
 ```
 
-| Segment | Colour | Per-machine? |
-|---|---|---|
-| `🧙 AI Wizard 🔮` badge | gold `#FBBF24` on black | **No** — same everywhere |
-| **Window list** | white on deep violet `#4c1d95`; current window on `#8b5cf6` | **Yes — this is the machine colour** |
-| Bar background | deep violet `#4c1d95` | **Yes** — matches the window list |
-| CPU/MEM bars | arcane violet `#A78BFA` → gold `#FBBF24` → red `#FF0000` | No. Fixed-width `  0%` … `100%` |
-| Net throughput | arcane violet | No. Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
-| `@host` | pale violet `#C4B5FD`, bold | No |
-| Date | arcane violet, bold | No. European `dd/mm/yyyy hh:mm` |
+The black end-caps are fixed so the bar has a constant frame; everything drawn *on* them
+takes the machine colour.
 
-Under load (colour escalates, bars fill):
+| Segment | Colour |
+|---|---|
+| `🧙 AI Wizard 🔮` badge | the accent, bold, on black |
+| **Window list** | the machine colour; current window on the active shade |
+| Bar background | the machine colour |
+| CPU/MEM bars | the accent — the *same* at 1% and at 100% |
+| Net throughput | the accent. Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
+| `@host` | the accent, brightened, bold |
+| Date | the accent, bold. European `dd/mm/yyyy hh:mm` |
+| `│` separators, pane borders | the accent, dimmed |
+
+**Black is the only fixed colour in the theme.** Everything else on the bar is that one
+machine colour or a shade derived from it.
+
+Under load the bars fill; the colour does not change:
 ```
  🧙 AI Wizard 🔮 │ windows…           CPU ███▅  88% │ MEM ████  95% │ ↓18.4M ↑ 2.1M │ @host │ 25/05/2026 13:14
 ```
@@ -32,8 +39,8 @@ Under load (colour escalates, bars fill):
 
 ```bash
 git clone git@github.com:mantovani/mantovani-tmux.git ~/.tmuxm
-~/.tmuxm/install.sh
-~/.tmuxm/install.sh --color blue    # give this machine its own colour
+~/.tmuxm/install.sh                 # picks a random colour for this machine
+~/.tmuxm/install.sh --color blue    # ...or choose one yourself
 tmux                                # or reattach
 # inside tmux: press C-a Shift+I to install TPM plugins
 ```
@@ -50,8 +57,12 @@ git clone git@github.com:mantovani/mantovani-tmux.git ~/projects/github/tmuxm
 
 `install.sh` is idempotent: links `~/.tmuxm`, backs up a pre-existing `~/.tmux.conf`
 and symlinks the new one, clones [TPM](https://github.com/tmux-plugins/tpm) if missing,
-sources the config if tmux is running. With no arguments it never touches
-`~/.tmux.local.conf`.
+sources the config if tmux is running.
+
+With no arguments it picks a **random colour, but only on a machine that doesn't have one
+yet**. Re-running never changes a colour you already have — `update.sh` forwards its
+arguments to `install.sh`, so a bare `update.sh` is the common case and it must not
+repaint your machine on every update. To deliberately re-roll, use `--color random`.
 
 ## Update
 
@@ -63,80 +74,118 @@ Fast-forwards from origin, kills the running sampler so the new code is loaded, 
 `install.sh` (which sources tmux and respawns the sampler), then verifies the sampler is
 alive and writing the cache. Arguments are forwarded, so `update.sh --color green` works.
 
-`update.sh` never rewrites `~/.tmux.local.conf` on its own — see the pitfall below if
-you set this machine up before the `--color` flag existed.
+`update.sh` never re-rolls a colour on its own — it forwards to `install.sh`, which only
+picks randomly when the machine has no colour yet.
 
-## Per-machine colour
+## The machine colour
 
-This is the point of the middle region. Pick one colour per machine and keep it, and
-you'll never again run a command on the wrong box because two windows looked alike.
-
-```bash
-~/.tmuxm/install.sh --list-colors     # show the presets
-~/.tmuxm/install.sh --color pink      # apply one
-```
-
-| Preset | Bar + window list | Current window | Suggested for |
-|---|---|---|---|
-| `red` | `#8B0000` | `#DC143C` | secondary machine |
-| `pink` | `#ff69b4` | `#d63384` | personal desktop |
-| `blue` | `#1e3a8a` | `#3b82f6` | work laptop |
-| `green` | `#14532d` | `#22c55e` | dev / staging box |
-| `purple` | `#4c1d95` | `#8b5cf6` | the shipped default |
-| `amber` | `#92400e` | `#f59e0b` | **production — think before you type** |
-| `slate` | `#334155` | `#64748b` | anything neutral |
-
-Any hex works too. The active-window shade is derived automatically (lightened if your
-colour is dark, darkened if it's light) and the text colour is picked from the
-background's luminance, so it stays readable:
+This is the whole point of the bar. One colour per machine, kept, and you'll never again
+run a command on the wrong box because two windows looked alike.
 
 ```bash
-~/.tmuxm/install.sh --color '#3366cc'
-~/.tmuxm/install.sh --color '#3366cc' --color-current '#88aaff'   # or set it yourself
+~/.tmuxm/install.sh                      # first install: generates a random colour
+~/.tmuxm/install.sh --color '#3366cc'    # or pick any 24-bit colour
+~/.tmuxm/install.sh --color random       # re-roll
 ```
+
+**There is no palette.** No list of named colours exists in this repo, because a list is
+just hardcoding with extra steps. You give it a hex, or it generates one. The only fixed
+colour in the theme is the black the badge and metrics sit on.
+
+Everything else is derived from that single colour, so you never hand-pick shades:
+
+| Derived | How |
+|---|---|
+| Bar + window list background | the colour itself; text black or white by luminance |
+| Active window | lightened if the colour is dark, darkened if light |
+| Accent (badge, labels, bars, date) | the colour, **lifted** if too dark to read on black |
+| Separators + inactive pane border | the accent at lightness 0.38 |
+| `@host` + active pane border | the accent brightened, chroma reduced |
 
 Reload with `tmux source ~/.tmux.conf` (or `C-a` then `:source ~/.tmux.conf`).
 
+### How random works
+
+Random means random — roughly 1.5 million reachable colours, not a draw from a list. The
+generator picks a **uniform hue over the full circle**, a lightness inside the legible band,
+and a chroma between 60% and 100% of the most that hue can hold in sRGB.
+
+It works in **OKLCH**, and that choice is what makes a random hue safe. The classic recipe
+([Ankerl][ankerl]) is "fix saturation and lightness, randomise hue" in HSL/HSV — right shape,
+wrong space. HSL is not perceptually uniform, so a yellow and a blue at the same nominal
+lightness differ wildly in apparent brightness, and "legible on black" would hold for some
+hues and not others. In OKLCH, [equal lightness looks equally light at every hue][oklch], so
+the guarantee holds for all 360 of them.
+
+**The legible band is measured, not guessed.** Sweeping every hue at maximum chroma and
+computing WCAG contrast against black:
+
+| OKLCH L | worst hue | contrast | |
+|---|---|---|---|
+| 0.55 | 299° | 3.65:1 | fails |
+| 0.61 | ~310° | 4.50:1 | **AA floor** |
+| 0.65 | 322° | 5.49:1 | AA |
+| 0.72 | ~328° | 7.28:1 | **AAA floor — used** |
+| 0.90 | 326° | 15.01:1 | AAA |
+
+The generator uses `L ∈ [0.72, 0.90]`. The floor is the AAA threshold; the ceiling is where
+hues wash toward white and stop being tellable apart. Violet is consistently the worst case —
+it carries the least luminance per unit of perceptual lightness.
+
+A colour you supply yourself is used exactly as given for the bar, and lifted to the floor
+only for drawing on black. `#ff69b4` (L=0.728) already clears it and is used untouched;
+`#1e3a8a` (L=0.379) becomes `#79a1ff` for the badge and metrics while the bar stays navy.
+
+### Load is shown by height, not colour
+
+The CPU/MEM bars are the machine's colour at 1% and at 100%. Load is encoded by the height
+of the blocks — `▁▂▃▄▅▆▇█` — which is a channel that survives every kind of colour-blindness,
+and keeps one machine looking like one colour.
+
+[ankerl]: https://martin.ankerl.com/2009/12/09/how-to-create-random-colors-programmatically/
+[oklch]: https://colorarchive.org/guides/oklch-color-space-guide/
 ### What it writes, and what it won't touch
 
-`--color` appends a marked block to `~/.tmux.local.conf`, which `tmux.conf` sources
-`-q` at the very end. The file is **git-ignored**, so each machine carries its own.
+`--color` writes a marked block to `~/.tmux.local.conf`, which `tmux.conf` sources `-q` at
+the very end. The file is **git-ignored**, so each machine carries its own.
 
 ```tmux
 # >>> tmuxm colour (managed by install.sh --color) >>>
-# Machine accent: pink — regenerate with: ~/.tmuxm/install.sh --color pink
+# Machine colour: #ff69b4 — regenerate with: ~/.tmuxm/install.sh --color '#ff69b4'
+# Derived: accent #ff69b4, dim #7a004b, bright #ffa4cc, active #d63384
 set -g status-style "bg=#ff69b4,fg=black"
 set -g window-status-style "bg=#ff69b4,fg=black"
 set -g window-status-current-style "bg=#d63384,fg=white,bold"
+set -g pane-border-style "fg=#7a004b"
+set -g pane-active-border-style "fg=#ff69b4"
+set -g status-left "#[bg=#000000,fg=#ff69b4,bold] 🧙 AI Wizard 🔮 #[bg=#000000,fg=white] "
+set -g status-right "#[bg=#000000,fg=#ff69b4] CPU #(bash ~/.tmuxm/bin/render-bar.sh cpu ff69b4) …"
 # <<< tmuxm colour <<<
 ```
+
+This block is the **single source of truth for colour**. `tmux.conf` deliberately sets no
+coloured option at all — it would be a second definition of the same thing, and whichever
+loaded last would win. `tmux.conf` keeps only geometry (`status-left-length`,
+`status-right-length`, `status-interval`) and behaviour.
+
+> **Why the colour argument has no `#`.** tmux expands its legacy format shorthands *inside*
+> `#(…)` before handing the command to the shell, and `#F` is one of them — window flags. So
+> `'#FBBF24'` arrives at `render-bar.sh` as `'*BBF24'`, which isn't a colour, and the bar
+> silently stops changing. Lowercase `#f` happens *not* to be a shorthand, so this fails for
+> only some colours — which makes it very easy to miss. `install.sh` passes bare hex and
+> `render-bar.sh` puts the `#` back.
 
 Re-running `--color` rewrites **only** that block. Everything else in the file is left
 alone — `~/.tmux.local.conf` is also where per-machine bits like the `xclip` copy-pipe
 bindings live, and those survive. If the file already existed without the markers, it's
 backed up to `~/.tmux.local.conf.bak.<timestamp>` before the block is appended.
 
-Three lines is the whole theme. That's deliberate: the badge and the metrics embed their
-own `#[bg=…]`, so they look identical on every machine — the constant frame is what makes
-the varying window colour easy to read at a glance.
-
-> **Pitfall — do not add these:**
-> ```tmux
-> set -g status-left-style  …    # changes left/right region geometry — right metrics collapse leftward
-> set -g status-right-style …    # same
-> set -g status-left "…"          # unnecessary; status-left already paints its own bg
-> ```
-> The base `tmux.conf` does set all five styles, but only because they share the same
-> dark-red bg — that's the special case where the geometry works out. In an override
-> they're almost always a different colour from `status-style`, which is exactly when
-> tmux collapses the right region.
+> **Pitfall — don't hand-write theme lines.** Every coloured option is generated. A copy
+> **outside** the markers sits later in the file, so tmux's last-wins rule makes it silently
+> override the managed block and your machine colour stops applying.
 >
-> **Machines set up before `--color` existed** may still carry a six-line override with
-> these in it. `install.sh` prints the offending line numbers on every run but never
-> edits your file — delete them by hand, then re-run `--color`.
-
-To re-style the right-hand metrics too, redefine `status-right` in your local file —
-copy it out of the *Status bar* section of `tmux.conf` and change the colour values.
+> `install.sh` detects exactly this and prints the offending line numbers on every run, but
+> never edits your file — delete them by hand, then re-run `--color`.
 
 ## Architecture
 
@@ -184,6 +233,7 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 | `~/.tmuxm` | The clone, or a symlink to it (created by `install.sh`) |
 | `~/.tmux.conf` | Symlink → `~/.tmuxm/tmux.conf` |
 | `~/.tmux.conf.bak.<timestamp>` | Backup of a pre-existing `~/.tmux.conf` |
+| `test.sh` | Test suite — run it from anywhere, exits 0 on success |
 | `~/.tmux.local.conf` | **Per-machine colour + overrides** — not tracked in git |
 | `~/.tmux.local.conf.bak.<timestamp>` | Backup made the first time `--color` touches an existing file |
 | `~/.tmux/plugins/tpm/` | TPM (cloned by `install.sh`) |
@@ -236,11 +286,12 @@ Steady-state on macOS (measured):
 ```
 tmuxm/
 ├── tmux.conf              # main config — symlinked to ~/.tmux.conf
-├── install.sh             # idempotent installer + --color
+├── install.sh             # installer + --color, OKLCH colour engine
 ├── update.sh              # pull, restart sampler, verify
+├── test.sh                # test suite
 ├── bin/
 │   ├── sampler.sh         # background daemon, writes cache
-│   ├── render-bar.sh      # cpu/mem/bat → arcane bar
+│   ├── render-bar.sh      # cpu/mem/bat → bar in the machine colour
 │   └── render-net.sh      # net throughput → fixed-width string
 ├── .gitignore
 └── README.md

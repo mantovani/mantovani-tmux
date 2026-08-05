@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
-# Render 4-block arcane bar + fixed-width percentage from cache.
-# Usage: render-bar.sh <cpu|mem|bat>
+# Render a 4-block bar + fixed-width percentage from the sampler cache.
+# Usage: render-bar.sh <cpu|mem|bat> <colour>
+#
+# Load is encoded by the HEIGHT of the blocks (▁▂▃▄▅▆▇█), not by colour: the bar
+# is the machine's colour at 1% and at 100%. One machine, one colour.
+#
+# The colour arrives without a leading '#'. tmux expands its legacy format
+# shorthands inside #(...) BEFORE running the command, and '#F' is one of them
+# (window flags), so "#FBBF24" would arrive here as "*BBF24". install.sh passes
+# bare hex and we put the '#' back.
 set -u
 
 METRIC="${1:-}"
+COLOR="${2:-}"
 CACHE="/tmp/tmuxm-stats-${USER}"
+
+if [ -z "$METRIC" ] || [ -z "$COLOR" ]; then
+  echo "usage: render-bar.sh <cpu|mem|bat> <colour>" >&2
+  exit 1
+fi
+COLOR="#${COLOR#\#}"
 
 pct=0
 if [ -r "$CACHE" ]; then
@@ -21,17 +36,4 @@ for i in 0 1 2 3; do
   out="${out}${bars[$h]}"
 done
 
-# Battery is inverted: low % is the danger zone.
-if [ "$METRIC" = "bat" ]; then
-  if   (( pct > 50 )); then c="#[fg=#A78BFA]"
-  elif (( pct > 20 )); then c="#[fg=#FBBF24]"
-  else                      c="#[fg=#FF0000,bold]"
-  fi
-else
-  if   (( pct < 50 )); then c="#[fg=#A78BFA]"
-  elif (( pct < 80 )); then c="#[fg=#FBBF24]"
-  else                      c="#[fg=#FF0000,bold]"
-  fi
-fi
-
-printf "%s%s %3d%%#[fg=default,nobold]" "$c" "$out" "$pct"
+printf "#[fg=%s]%s %3d%%#[fg=default,nobold]" "$COLOR" "$out" "$pct"

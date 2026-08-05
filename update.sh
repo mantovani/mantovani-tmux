@@ -37,7 +37,8 @@ fi
 
 # 3. Run installer: link ~/.tmuxm, symlink ~/.tmux.conf, chmod, TPM, and
 #    `tmux source` which respawns the sampler via `run-shell -b` in tmux.conf.
-#    Args are forwarded, so `update.sh --color blue` works. ${@+"$@"} keeps
+#    Args are forwarded, so `update.sh --color random` works. A bare update.sh
+#    forwards nothing and install.sh leaves an existing colour alone. ${@+"$@"} keeps
 #    this safe under `set -u` on macOS stock bash 3.2 when there are no args.
 "$REPO_DIR/install.sh" ${@+"$@"}
 
