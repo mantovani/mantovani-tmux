@@ -47,10 +47,8 @@ BEGIN {
   MIN_L = 0.72
   MAX_L = 0.90   # above this, hues wash toward white and stop being telling apart
 
-  DIM_L       = 0.38   # pane borders + separators
-  BRIGHT_LIFT = 0.08   # @host
-  BRIGHT_MAX  = 0.95
-  BRIGHT_CMUL = 0.62
+  DIM_L = 0.38   # pane borders + separators — the only shade that is not the
+                 # accent itself, because chrome must not compete with content
 
   if (MODE == "random") { print random_color(); exit }
   if (MODE == "derive") { derive(ACCENT); emit();  exit }
@@ -146,7 +144,7 @@ function best_fg(hex,   y) {
   return (((y + 0.05) / 0.05) >= (1.05 / (y + 0.05))) ? "black" : "white"
 }
 
-function derive(base,   L, C, H, bl, al) {
+function derive(base,   L, C, H, al) {
   to_oklch(base); L = OK_L; C = OK_C; H = OK_H
 
   BASE_FG = best_fg(base)
@@ -166,16 +164,11 @@ function derive(base,   L, C, H, bl, al) {
   ACCENT = to_hex(L, C, H)
 
   DIM = to_hex(DIM_L, C, H)
-
-  bl = L + BRIGHT_LIFT
-  if (bl > BRIGHT_MAX) bl = BRIGHT_MAX
-  BRIGHT = to_hex(bl, C * BRIGHT_CMUL, H)
 }
 
 function emit() {
   printf "THEME_ACCENT=%s\n",    ACCENT
   printf "THEME_DIM=%s\n",       DIM
-  printf "THEME_BRIGHT=%s\n",    BRIGHT
   printf "THEME_ACTIVE=%s\n",    ACTIVE
   printf "THEME_BASE_FG=%s\n",   BASE_FG
   printf "THEME_ACTIVE_FG=%s\n", ACTIVE_FG
@@ -203,7 +196,7 @@ random_color() {
       "$OKLCH_AWK" </dev/null
 }
 
-# Sets THEME_ACCENT / THEME_DIM / THEME_BRIGHT.
+# Sets THEME_ACCENT / THEME_DIM / THEME_ACTIVE / THEME_BASE_FG / THEME_ACTIVE_FG.
 derive_theme() {
   local out
   out="$(awk -v MODE=derive -v ACCENT="$1" "$OKLCH_AWK" </dev/null)"
@@ -250,6 +243,7 @@ write_color_block() {
 
   rb='#(bash ~/.tmuxm/bin/render-bar.sh'
   rn='#(bash ~/.tmuxm/bin/render-net.sh'
+  rz='#(bash ~/.tmuxm/bin/render-tz.sh)'
 
   # Bare hex, no '#'. tmux expands its legacy format shorthands inside #(...)
   # before handing the command to the shell, and '#F' is one of them (window
@@ -262,14 +256,14 @@ write_color_block() {
   cat > "$blockfile" <<EOF
 $BEGIN_MARK
 # Machine colour: $COLOR_BASE — regenerate with: ~/.tmuxm/install.sh --color '$COLOR_BASE'
-# Derived: accent $THEME_ACCENT, dim $THEME_DIM, bright $THEME_BRIGHT, active $THEME_ACTIVE
+# Derived: accent $THEME_ACCENT, dim $THEME_DIM, active $THEME_ACTIVE
 set -g status-style "bg=$COLOR_BASE,fg=$THEME_BASE_FG"
 set -g window-status-style "bg=$COLOR_BASE,fg=$THEME_BASE_FG"
 set -g window-status-current-style "bg=$THEME_ACTIVE,fg=$THEME_ACTIVE_FG,bold"
 set -g pane-border-style "fg=$THEME_DIM"
 set -g pane-active-border-style "fg=$THEME_ACCENT"
 set -g status-left "#[bg=#000000,fg=$THEME_ACCENT,bold] 🧙 AI Wizard 🔮 #[bg=#000000,fg=white] "
-set -g status-right "#[bg=#000000,fg=$THEME_ACCENT] CPU $rb cpu $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] MEM $rb mem $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] ↓ $rn in) ↑ $rn out) #[fg=$THEME_DIM]│#[fg=$THEME_BRIGHT,bold] @#h #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] %d/%m/%Y %H:%M "
+set -g status-right "#[bg=#000000,fg=$THEME_ACCENT] CPU $rb cpu $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] MEM $rb mem $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] ↓ $rn in) ↑ $rn out) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] @#h #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] %d/%m/%Y %H:%M $rz "
 $END_MARK
 EOF
 
@@ -297,7 +291,7 @@ EOF
     echo "[OK] Backed up $LOCAL_CONF → $LOCAL_CONF.bak.$ts"
     echo "[OK] Appended managed block to $LOCAL_CONF"
   fi
-  echo "[OK] Colour $COLOR_BASE — accent $THEME_ACCENT, dim $THEME_DIM, bright $THEME_BRIGHT, active $THEME_ACTIVE"
+  echo "[OK] Colour $COLOR_BASE — accent $THEME_ACCENT, dim $THEME_DIM, active $THEME_ACTIVE"
 }
 
 # A copy outside the markers sits later in the file and therefore wins, silently

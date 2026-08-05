@@ -21,17 +21,31 @@ else
   echo "[OK] Pulled to $(git rev-parse --short HEAD)"
 fi
 
-# 2. Kill stale sampler so the new code is used on the next spawn.
-#    The sampler's EXIT trap removes the pidfile.
+# 2. Stop the running sampler so the new code is used on the next spawn.
+#    It traps TERM and exits promptly, releasing the pidfile.
+#
+#    Waiting for the process to actually be gone matters: install.sh reloads
+#    tmux, which respawns the sampler, and a replacement that starts while the
+#    old one is still alive sees a live owner and exits — leaving no sampler at
+#    all. Budget 5s, because on macOS the TERM handler can be deferred until an
+#    in-flight `iostat` returns (~1s), which the old 1s budget did not cover.
 if [ -r "$PIDFILE" ]; then
   old_pid=$(cat "$PIDFILE")
   if kill -0 "$old_pid" 2>/dev/null; then
     kill "$old_pid"
-    echo "[OK] Killed stale sampler (PID $old_pid)"
-    for _ in 1 2 3 4 5; do
-      [ -e "$PIDFILE" ] || break
-      sleep 0.2
+    for _ in $(seq 1 50); do
+      kill -0 "$old_pid" 2>/dev/null || break
+      sleep 0.1
     done
+    if kill -0 "$old_pid" 2>/dev/null; then
+      echo "[!!] Sampler PID $old_pid ignored SIGTERM after 5s; forcing"
+      kill -9 "$old_pid" 2>/dev/null || true
+      rm -f "$PIDFILE"
+    else
+      echo "[OK] Stopped sampler (PID $old_pid)"
+    fi
+  else
+    rm -f "$PIDFILE"   # pidfile outlived its process
   fi
 fi
 

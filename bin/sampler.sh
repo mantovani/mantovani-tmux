@@ -10,12 +10,33 @@ CACHE="/tmp/tmuxm-stats-${USER}"
 PIDFILE="/tmp/tmuxm-sampler-${USER}.pid"
 OS="$(uname -s)"
 
-# Single-instance guard
-if [ -r "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
-  exit 0
+# Single-instance guard. Creating the pidfile under `noclobber` is atomic;
+# test-then-write is not. Two tmux servers starting in the same instant would
+# both see no pidfile, both write, and both run — and the loser's PID would be
+# the one recorded, leaving an orphan that no later run can find or reap.
+claim_pidfile() { ( set -o noclobber; echo $$ > "$PIDFILE" ) 2>/dev/null; }
+
+if ! claim_pidfile; then
+  owner="$(cat "$PIDFILE" 2>/dev/null || true)"
+  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+    exit 0                    # a live sampler already owns it
+  fi
+  rm -f "$PIDFILE"            # stale pidfile from a sampler that was killed -9
+  claim_pidfile || exit 0     # someone else won the retry; let them have it
 fi
-echo $$ > "$PIDFILE"
-trap 'rm -f "$PIDFILE"' EXIT
+
+# Only clear the pidfile if it is still ours. A sampler that lost a race must
+# never delete the winner's claim.
+trap '[ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"' EXIT
+
+# update.sh stops the running sampler with SIGTERM before restarting it.
+# Handling it means we exit 0 rather than dying by the signal, so tmux stops
+# logging "'bash ~/.tmuxm/bin/sampler.sh' terminated by signal 15" — and, more
+# importantly, we exit *promptly*: update.sh only waits about a second for the
+# pidfile to clear, and a sampler still sitting in `sleep` past that window
+# makes the replacement think a live sampler is present and quietly give up,
+# leaving no sampler running at all.
+trap 'exit 0' TERM INT
 
 read_net_bytes() {
   case "$OS" in
@@ -131,7 +152,10 @@ CPU=0
 [ "$OS" = "Linux" ] && read_cpu
 
 while :; do
-  sleep "$INTERVAL"
+  # Backgrounded so a trapped signal interrupts `wait` immediately. A plain
+  # `sleep` would defer the TERM handler until the sleep finished — measured at
+  # up to INTERVAL seconds, which is longer than update.sh waits for us to go.
+  sleep "$INTERVAL" & wait $! 2>/dev/null || true
   now=$(date +%s)
   read ib ob <<< "$(read_net_bytes)"
   dt=$(( now - prev_t )); (( dt <= 0 )) && dt=1

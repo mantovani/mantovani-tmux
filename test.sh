@@ -79,11 +79,10 @@ echo
 echo "=== 5. Derived shades keep the accent's hue ==="
 for c in '#ff69b4' '#1e3a8a' '#22d3ee'; do
   eval "$(derive "$c")"
-  hs="$(for x in "$THEME_ACCENT" "$THEME_DIM" "$THEME_BRIGHT"; do awk -v C="$x" "$ENGINE"' BEGIN{to_oklch(C); printf "%d ", OK_H}' </dev/null; done)"
+  hs="$(for x in "$THEME_ACCENT" "$THEME_DIM"; do awk -v C="$x" "$ENGINE"' BEGIN{to_oklch(C); printf "%d ", OK_H}' </dev/null; done)"
   set -- $hs
   d1=$(( $1 - $2 )); [ $d1 -lt 0 ] && d1=$(( -d1 ))
-  d2=$(( $1 - $3 )); [ $d2 -lt 0 ] && d2=$(( -d2 ))
-  if [ $d1 -le 6 ] && [ $d2 -le 6 ]; then ok "$c: accent/dim/bright share a hue (${hs% })"; else bad "$c: hues drift (${hs% })"; fi
+  if [ $d1 -le 6 ]; then ok "$c: accent/dim share a hue (${hs% })"; else bad "$c: hues drift (${hs% })"; fi
 done
 
 echo
@@ -179,7 +178,69 @@ done
 rm -rf "$H"
 
 echo
-echo "=== 11. tmux.conf defines no colours (single source of truth) ==="
+echo "=== 11. Sampler stops cleanly and promptly on SIGTERM ==="
+# update.sh stops the sampler with SIGTERM before restarting it. Dying *by* the
+# signal makes tmux log "terminated by signal 15"; dying slowly is worse — it
+# outlasts update.sh's wait, so the replacement sees a live sampler and gives
+# up, leaving none running.
+# sampler.sh derives its pidfile and cache from $USER, so overriding USER gives
+# these tests their own /tmp paths. Without it they would contend for the
+# pidfile of the sampler actually running this session and kill it.
+TU="tmuxmtest$$"
+pf="/tmp/tmuxm-sampler-${TU}.pid"
+rm -f "$pf" "/tmp/tmuxm-stats-${TU}"
+
+# Invoke bash directly, not via a shell function: `f & pid=$!` records the
+# PID of the subshell running f, not of the sampler inside it, so the TERM
+# would go to a wrapper that has no handler.
+USER="$TU" bash "$REPO/bin/sampler.sh" & sp=$!
+sleep 1
+if [ -f "$pf" ]; then ok "sampler claimed the pidfile ($(cat "$pf"))"; else bad "no pidfile created"; fi
+start=$(date +%s%N); kill -TERM "$sp" 2>/dev/null; wait "$sp" 2>/dev/null; rc=$?
+ms=$(( ($(date +%s%N) - start) / 1000000 ))
+chk "exits 0 on SIGTERM (not 143 = killed by signal)" "$rc" "0"
+if [ "$ms" -lt 500 ]; then ok "exited in ${ms}ms — inside update.sh's wait window"; else bad "took ${ms}ms; update.sh only waits 5000ms"; fi
+if [ ! -f "$pf" ]; then ok "pidfile released on exit"; else bad "pidfile left behind"; fi
+
+echo
+echo "=== 12. Only one sampler survives a concurrent start ==="
+pids=""
+for i in 1 2 3 4 5; do USER="$TU" bash "$REPO/bin/sampler.sh" & pids="$pids $!"; done
+sleep 1.5
+survivors=0; surv_pid=""
+for p in $pids; do
+  if kill -0 "$p" 2>/dev/null; then survivors=$((survivors+1)); surv_pid="$p"; fi
+done
+chk "5 simultaneous starts leave exactly 1 running" "$survivors" "1"
+owner="$(cat "$pf" 2>/dev/null || echo none)"
+chk "the pidfile names that survivor" "$owner" "$surv_pid"
+kill -TERM "$owner" 2>/dev/null
+sleep 0.4
+for p in $pids; do kill -9 "$p" 2>/dev/null; done
+rm -f "$pf" "/tmp/tmuxm-stats-${TU}"
+
+echo
+echo "=== 12b. The session's own sampler was not disturbed ==="
+mine="/tmp/tmuxm-sampler-${USER}.pid"
+if [ ! -f "$mine" ]; then
+  ok "no sampler running for this session; nothing to disturb"
+elif kill -0 "$(cat "$mine")" 2>/dev/null; then
+  ok "live sampler PID $(cat "$mine") still running after the tests"
+else
+  bad "the tests killed this session's sampler"
+fi
+
+echo
+echo "=== 12c. Timezone offset renders in the requested format ==="
+chk "America/Sao_Paulo" "$(TZ=America/Sao_Paulo bash "$REPO/bin/render-tz.sh")" "-3 GMT"
+chk "UTC"               "$(TZ=UTC               bash "$REPO/bin/render-tz.sh")" "0 GMT"
+chk "Asia/Kolkata (half-hour offset)" "$(TZ=Asia/Kolkata bash "$REPO/bin/render-tz.sh")" "+5:30 GMT"
+chk "Pacific/Chatham (45-min offset)" "$(TZ=Pacific/Chatham bash "$REPO/bin/render-tz.sh")" "+12:45 GMT"
+# A leading 0 in the hour field must not be read as octal.
+chk "Asia/Tokyo (+0900, octal trap)" "$(TZ=Asia/Tokyo bash "$REPO/bin/render-tz.sh")" "+9 GMT"
+
+echo
+echo "=== 13. tmux.conf defines no colours (single source of truth) ==="
 hits="$(grep -nE '^[[:space:]]*set.*(status-style|status-left |status-right |window-status|pane-.*border|fg=#|bg=#)' "$REPO/tmux.conf" || true)"
 if [ -z "$hits" ]; then ok "tmux.conf sets no coloured options"; else bad "tmux.conf still defines colours:"; printf '%s\n' "$hits"; fi
 

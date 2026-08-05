@@ -8,7 +8,7 @@ Cross-platform (macOS & Linux).
 ## What it looks like
 
 ```
- 🧙 AI Wizard 🔮 │ 1:zsh* 2:vim 3:logs           CPU █▁▁▁  23% │ MEM ███▂  79% │ ↓ 99.3K ↑  1.9K │ @host │ 25/05/2026 13:14
+ 🧙 AI Wizard 🔮 │ 1:zsh* 2:vim 3:logs        CPU █▁▁▁  23% │ MEM ███▂  79% │ ↓ 99.3K ↑  1.9K │ @host │ 25/05/2026 13:14 -3 GMT
 └── status-left ─┘└─── window list ────┘         └──────────────────── status-right (metrics) ─────────────────────────┘
    black end-cap      machine colour                          black end-cap, machine colour
 ```
@@ -23,8 +23,8 @@ takes the machine colour.
 | Bar background | the machine colour |
 | CPU/MEM bars | the accent — the *same* at 1% and at 100% |
 | Net throughput | the accent. Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
-| `@host` | the accent, brightened, bold |
-| Date | the accent, bold. European `dd/mm/yyyy hh:mm` |
+| `@host` | the accent, bold |
+| Date + UTC offset | the accent, bold. European `dd/mm/yyyy hh:mm`, then `-3 GMT` |
 | `│` separators, pane borders | the accent, dimmed |
 
 **Black is the only fixed colour in the theme.** Everything else on the bar is that one
@@ -32,7 +32,7 @@ machine colour or a shade derived from it.
 
 Under load the bars fill; the colour does not change:
 ```
- 🧙 AI Wizard 🔮 │ windows…           CPU ███▅  88% │ MEM ████  95% │ ↓18.4M ↑ 2.1M │ @host │ 25/05/2026 13:14
+ 🧙 AI Wizard 🔮 │ windows…        CPU ███▅  88% │ MEM ████  95% │ ↓18.4M ↑ 2.1M │ @host │ 25/05/2026 13:14 -3 GMT
 ```
 
 ## Install
@@ -40,7 +40,7 @@ Under load the bars fill; the colour does not change:
 ```bash
 git clone git@github.com:mantovani/mantovani-tmux.git ~/.tmuxm
 ~/.tmuxm/install.sh                 # picks a random colour for this machine
-~/.tmuxm/install.sh --color blue    # ...or choose one yourself
+~/.tmuxm/install.sh --color '#3366cc'   # ...or choose one yourself
 tmux                                # or reattach
 # inside tmux: press C-a Shift+I to install TPM plugins
 ```
@@ -72,7 +72,7 @@ repaint your machine on every update. To deliberately re-roll, use `--color rand
 
 Fast-forwards from origin, kills the running sampler so the new code is loaded, re-runs
 `install.sh` (which sources tmux and respawns the sampler), then verifies the sampler is
-alive and writing the cache. Arguments are forwarded, so `update.sh --color green` works.
+alive and writing the cache. Arguments are forwarded, so `update.sh --color random` works.
 
 `update.sh` never re-rolls a colour on its own — it forwards to `install.sh`, which only
 picks randomly when the machine has no colour yet.
@@ -100,7 +100,7 @@ Everything else is derived from that single colour, so you never hand-pick shade
 | Active window | lightened if the colour is dark, darkened if light |
 | Accent (badge, labels, bars, date) | the colour, **lifted** if too dark to read on black |
 | Separators + inactive pane border | the accent at lightness 0.38 |
-| `@host` + active pane border | the accent brightened, chroma reduced |
+| `@host`, date, active pane border | the accent itself |
 
 Reload with `tmux source ~/.tmux.conf` (or `C-a` then `:source ~/.tmux.conf`).
 
@@ -144,6 +144,7 @@ and keeps one machine looking like one colour.
 
 [ankerl]: https://martin.ankerl.com/2009/12/09/how-to-create-random-colors-programmatically/
 [oklch]: https://colorarchive.org/guides/oklch-color-space-guide/
+
 ### What it writes, and what it won't touch
 
 `--color` writes a marked block to `~/.tmux.local.conf`, which `tmux.conf` sources `-q` at
@@ -152,14 +153,14 @@ the very end. The file is **git-ignored**, so each machine carries its own.
 ```tmux
 # >>> tmuxm colour (managed by install.sh --color) >>>
 # Machine colour: #ff69b4 — regenerate with: ~/.tmuxm/install.sh --color '#ff69b4'
-# Derived: accent #ff69b4, dim #7a004b, bright #ffa4cc, active #d63384
+# Derived: accent #ff69b4, dim #7a004b, active #d80088
 set -g status-style "bg=#ff69b4,fg=black"
 set -g window-status-style "bg=#ff69b4,fg=black"
-set -g window-status-current-style "bg=#d63384,fg=white,bold"
+set -g window-status-current-style "bg=#d80088,fg=white,bold"
 set -g pane-border-style "fg=#7a004b"
 set -g pane-active-border-style "fg=#ff69b4"
 set -g status-left "#[bg=#000000,fg=#ff69b4,bold] 🧙 AI Wizard 🔮 #[bg=#000000,fg=white] "
-set -g status-right "#[bg=#000000,fg=#ff69b4] CPU #(bash ~/.tmuxm/bin/render-bar.sh cpu ff69b4) …"
+set -g status-right "#[bg=#000000,fg=#ff69b4] CPU #(bash ~/.tmuxm/bin/render-bar.sh cpu ff69b4) … %d/%m/%Y %H:%M #(bash ~/.tmuxm/bin/render-tz.sh) "
 # <<< tmuxm colour <<<
 ```
 
@@ -214,8 +215,17 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 ```
 
 - **One sampler per user**, no matter how many tmux servers/sessions/clients.
-  Pidfile at `/tmp/tmuxm-sampler-$USER.pid` is checked on each launch; if the recorded
-  PID is alive (`kill -0` succeeds), the new instance exits immediately.
+  The pidfile at `/tmp/tmuxm-sampler-$USER.pid` is claimed with `set -o noclobber`, which
+  creates it atomically — a test-then-write would let two tmux servers starting in the same
+  instant both pass the check and both run. If the claim fails and the recorded PID is
+  alive, the new instance exits; if it is dead, the stale file is taken over. A sampler only
+  clears the pidfile if it still owns it, so a loser never releases the winner's claim.
+- **Stops promptly on SIGTERM** — `update.sh` stops the sampler before reloading tmux, which
+  respawns it. The handler is trapped (so tmux never logs `terminated by signal 15`) and the
+  interval `sleep` is backgrounded behind `wait`, so the signal is acted on in milliseconds
+  rather than at the end of the current sleep. Without that, the old sampler can outlive
+  `update.sh`'s wait, the replacement sees a live owner and exits, and you end up with **no
+  sampler running** and a frozen status bar.
 - **Atomic writes** — the sampler writes to `$CACHE.tmp` and renames, so renderers always
   read a consistent file.
 - **Cross-platform** — `sampler.sh` branches on `uname -s`:
@@ -292,7 +302,8 @@ tmuxm/
 ├── bin/
 │   ├── sampler.sh         # background daemon, writes cache
 │   ├── render-bar.sh      # cpu/mem/bat → bar in the machine colour
-│   └── render-net.sh      # net throughput → fixed-width string
+│   ├── render-net.sh      # net throughput → fixed-width string
+│   └── render-tz.sh       # UTC offset → "-3 GMT"
 ├── .gitignore
 └── README.md
 ```
