@@ -15,11 +15,6 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
-# GPU detection, shared verbatim with bin/sampler.sh. Whether this machine gets GPU
-# segments is decided here, once, and baked into the generated block — so a machine
-# without one produces byte-for-byte the block it always has.
-[ -r "$REPO_DIR/bin/gpu.sh" ] && . "$REPO_DIR/bin/gpu.sh"
-
 LINK="$HOME/.tmuxm"
 TARGET="$HOME/.tmux.conf"
 SOURCE="$LINK/tmux.conf"
@@ -247,24 +242,21 @@ write_color_block() {
                        | awk -F= '$1=="THEME_BASE_FG"{print $2}')"
   fi
 
-  rb='#(bash ~/.tmuxm/bin/render-bar.sh'
-  rn='#(bash ~/.tmuxm/bin/render-net.sh'
-  rz='#(bash ~/.tmuxm/bin/render-tz.sh)'
+  # One process draws every metric; a second prints the UTC offset. This used
+  # to be seven #() calls, each a bash that forked an awk.
+  rm='#(~/.tmuxm/bin/tmuxm render'
+  rz='#(~/.tmuxm/bin/tmuxm tz)'
 
   # Bare hex, no '#'. tmux expands its legacy format shorthands inside #(...)
   # before handing the command to the shell, and '#F' is one of them (window
   # flags) — '#FBBF24' would arrive at render-bar.sh as '*BBF24'. Lowercase '#f'
   # happens to be safe, which makes this fail for only some colours.
   accent_a="${THEME_ACCENT#\#}"
+  dim_a="${THEME_DIM#\#}"
 
-  # The one thing besides colour that varies per machine. Empty on a box with no
-  # readable GPU, and the status-right line below is then character-for-character
-  # the line this installer has always written — no placeholder, no flat 0% bar,
-  # nothing to notice.
-  gpu_seg=""
-  if command -v gpu_present >/dev/null 2>&1 && gpu_present; then
-    gpu_seg="#[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] GPU $rb gpu $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] VRAM $rb vram $accent_a) "
-  fi
+  # GPU presence is no longer decided here. The binary draws the whole metric
+  # block, so it can tell per refresh whether this machine has a readable GPU —
+  # and a machine that gains one no longer needs install.sh re-run to see it.
 
   blockfile="$(mktemp "${TMPDIR:-/tmp}/tmuxm-block.XXXXXX")"
   trap 'rm -f "$blockfile"' RETURN
@@ -278,7 +270,7 @@ set -g window-status-current-style "bg=$THEME_ACTIVE,fg=$THEME_ACTIVE_FG,bold"
 set -g pane-border-style "fg=$THEME_DIM"
 set -g pane-active-border-style "fg=$THEME_ACCENT"
 set -g status-left "#[bg=#000000,fg=$THEME_ACCENT,bold] 🧙 AI Wizard 🔮 #[bg=#000000,fg=white] "
-set -g status-right "#[bg=#000000,fg=$THEME_ACCENT] CPU $rb cpu $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] MEM $rb mem $accent_a) ${gpu_seg}#[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] ↓ $rn in) ↑ $rn out) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] @#h #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] %d/%m/%Y %H:%M $rz "
+set -g status-right "#[bg=#000000,fg=$THEME_ACCENT]$rm $accent_a $dim_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] @#h #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] %d/%m/%Y %H:%M $rz "
 $END_MARK
 EOF
 
@@ -400,8 +392,40 @@ fi
 ln -sfn "$SOURCE" "$TARGET"
 echo "[OK] Linked $TARGET → $SOURCE"
 
-# ── 4. Ensure bin scripts are executable ──────────────────────
-chmod +x "$REPO_DIR"/bin/*.sh
+# ── 3b. Retire the sampler this version replaced ──────────────
+# A daemon already running does not stop just because its script was deleted —
+# bash read the file into memory long ago and will happily keep looping. Left
+# alone it outlives the upgrade, writing a cache nothing reads, until reboot.
+# Idempotent: after the first run there is no pidfile to find.
+OLD_PIDFILE="/tmp/tmuxm-sampler-${USER}.pid"
+if [ -r "$OLD_PIDFILE" ]; then
+  old_pid="$(cat "$OLD_PIDFILE" 2>/dev/null || true)"
+  if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+    kill "$old_pid" 2>/dev/null || true
+    echo "[OK] Stopped the background sampler this version removes (PID $old_pid)"
+  fi
+  rm -f "$OLD_PIDFILE"
+fi
+rm -f "/tmp/tmuxm-stats-${USER}"
+
+# ── 4. Build the renderer ─────────────────────────────────────
+# Built from source on every machine rather than shipped, so the oldest
+# toolchain in the fleet is the one that has to work. Say so plainly instead of
+# letting cargo fail with a version error nobody reads.
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "[!!] cargo not found — tmuxm's status bar is a Rust binary now." >&2
+  echo "     Install a toolchain:  curl https://sh.rustup.rs -sSf | sh" >&2
+  exit 1
+fi
+mkdir -p "$REPO_DIR/bin"
+if cargo build --release --manifest-path "$REPO_DIR/rust/Cargo.toml" 2>&1 | sed 's/^/     /'; then
+  cp "$REPO_DIR/rust/target/release/tmuxm" "$REPO_DIR/bin/tmuxm"
+  chmod +x "$REPO_DIR/bin/tmuxm"
+  echo "[OK] Built bin/tmuxm ($("$REPO_DIR/bin/tmuxm" tz >/dev/null 2>&1 && echo working || echo "built, but not runnable"))"
+else
+  echo "[!!] cargo build failed — see above. Minimum supported Rust is 1.75." >&2
+  exit 1
+fi
 
 # ── 5. Clone TPM if missing ───────────────────────────────────
 if [ ! -d "$TPM_DIR" ]; then

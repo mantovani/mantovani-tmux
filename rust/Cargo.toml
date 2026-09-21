@@ -1,0 +1,23 @@
+[package]
+name = "tmuxm"
+version = "0.1.0"
+edition = "2021"
+# Build-from-source means the OLDEST machine that installs this sets the floor,
+# not the newest. 1.75 is what the Debian/Ubuntu system package ships.
+rust-version = "1.75"
+description = "Status bar renderer for the tmuxm tmux config"
+license = "MIT"
+
+[dependencies]
+# The only dependency. libc already exposes dlopen/dlsym, so NVML needs no
+# separate loader crate, and everything else is std.
+libc = "0.2"
+
+[profile.release]
+# Tuned for startup, not for size: nobody downloads this binary, every machine
+# compiles it. opt-level="z" + codegen-units=1 + lto="fat" would trade minutes
+# of build time and vectorisation for bytes that cost nothing here.
+opt-level = 3
+lto = "thin"
+strip = true
+panic = "abort"

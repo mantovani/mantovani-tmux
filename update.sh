@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Updater for the tmuxm config on this machine.
-# Pulls latest from origin, kills the stale sampler, re-runs install.sh
-# (which sources tmux and spawns a fresh sampler), then verifies.
+# Pulls latest from origin, re-runs install.sh (which rebuilds the binary and
+# sources tmux), then verifies the binary runs.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PIDFILE="/tmp/tmuxm-sampler-${USER}.pid"
-CACHE="/tmp/tmuxm-stats-${USER}"
 
 cd "$REPO_DIR"
 
@@ -21,53 +19,28 @@ else
   echo "[OK] Pulled to $(git rev-parse --short HEAD)"
 fi
 
-# 2. Stop the running sampler so the new code is used on the next spawn.
-#    It traps TERM and exits promptly, releasing the pidfile.
-#
-#    Waiting for the process to actually be gone matters: install.sh reloads
-#    tmux, which respawns the sampler, and a replacement that starts while the
-#    old one is still alive sees a live owner and exits — leaving no sampler at
-#    all. Budget 5s, because on macOS the TERM handler can be deferred until an
-#    in-flight `iostat` returns (~1s), which the old 1s budget did not cover.
-if [ -r "$PIDFILE" ]; then
-  old_pid=$(cat "$PIDFILE")
-  if kill -0 "$old_pid" 2>/dev/null; then
-    kill "$old_pid"
-    for _ in $(seq 1 50); do
-      kill -0 "$old_pid" 2>/dev/null || break
-      sleep 0.1
-    done
-    if kill -0 "$old_pid" 2>/dev/null; then
-      echo "[!!] Sampler PID $old_pid ignored SIGTERM after 5s; forcing"
-      kill -9 "$old_pid" 2>/dev/null || true
-      rm -f "$PIDFILE"
-    else
-      echo "[OK] Stopped sampler (PID $old_pid)"
-    fi
-  else
-    rm -f "$PIDFILE"   # pidfile outlived its process
-  fi
-fi
+# 2. (Nothing to stop.) There is no sampler any more — the bar is a binary tmux
+#    runs on its own refresh, so an update needs no process wrangling. This used
+#    to SIGTERM the daemon and wait up to 5s for its pidfile to clear, because a
+#    replacement that started while the old one still held the claim would exit
+#    and leave none running at all.
 
-# 3. Run installer: link ~/.tmuxm, symlink ~/.tmux.conf, chmod, TPM, and
-#    `tmux source` which respawns the sampler via `run-shell -b` in tmux.conf.
-#    Args are forwarded, so `update.sh --color random` works. A bare update.sh
+# 3. Run installer: link ~/.tmuxm, symlink ~/.tmux.conf, rebuild bin/tmuxm, TPM,
+#    and `tmux source`. Args are forwarded, so `update.sh --color random` works.
+#    A bare update.sh
 #    forwards nothing and install.sh leaves an existing colour alone. ${@+"$@"} keeps
 #    this safe under `set -u` on macOS stock bash 3.2 when there are no args.
 "$REPO_DIR/install.sh" ${@+"$@"}
 
-# 4. Verify the new sampler is alive and writing the cache.
-if tmux info &>/dev/null; then
-  sleep 3
-  if [ -r "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-    echo "[OK] Sampler alive (PID $(cat "$PIDFILE"))"
-    if [ -r "$CACHE" ]; then
-      sed 's/^/       /' "$CACHE"
-    fi
-  else
-    echo "[!!] Sampler not running despite tmux being up — check tmux config"
-    exit 1
-  fi
+# 4. Verify the rebuilt binary actually renders.
+if "$REPO_DIR/bin/tmuxm" tz >/dev/null 2>&1; then
+  echo "[OK] bin/tmuxm runs ($("$REPO_DIR/bin/tmuxm" tz) UTC offset)"
 else
-  echo "[OK] No tmux running; sampler will start when you launch tmux"
+  echo "[!!] bin/tmuxm did not run — the status bar will be empty" >&2
+  exit 1
+fi
+if tmux info &>/dev/null; then
+  echo "[OK] tmux reloaded; the bar refreshes within $(tmux show -gv status-interval)s"
+else
+  echo "[OK] No tmux running; the bar will draw when you launch it"
 fi

@@ -1,0 +1,45 @@
+name: ci
+
+# Binaries are never shipped — every machine builds its own — so this exists to
+# answer one question: does the source still compile everywhere it claims to?
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.75 --profile minimal --component clippy,rustfmt
+      - run: rustup default 1.75
+      # The MSRV is load-bearing: install.sh builds from source, so the oldest
+      # toolchain in the fleet is the one that has to work, not the newest.
+      - run: cargo fmt --manifest-path rust/Cargo.toml --check
+      - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path rust/Cargo.toml
+
+  cross:
+    # A compile break on ARM should be a failed check, not a surprise on a Pi.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-unknown-linux-gnu, aarch64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.75 --profile minimal --target ${{ matrix.target }}
+      - run: rustup default 1.75
+      # check, not build: no linker for these targets here, and a type error is
+      # what we are actually looking for.
+      - run: cargo check --manifest-path rust/Cargo.toml --target ${{ matrix.target }}
+
+  suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: ./install.sh --color '#ff69b4'
+      - run: ./test.sh

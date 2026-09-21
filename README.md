@@ -66,9 +66,15 @@ git clone git@github.com:mantovani/mantovani-tmux.git ~/projects/github/tmuxm
 ~/projects/github/tmuxm/install.sh   # creates ~/.tmuxm -> ~/projects/github/tmuxm
 ```
 
+**You need a Rust toolchain.** The status bar is a small binary built from source on
+install — nothing prebuilt is downloaded, so `cargo` has to be there
+(`curl https://sh.rustup.rs -sSf | sh`). Minimum supported Rust is **1.75**.
+
 `install.sh` is idempotent: links `~/.tmuxm`, backs up a pre-existing `~/.tmux.conf`
-and symlinks the new one, clones [TPM](https://github.com/tmux-plugins/tpm) if missing,
-sources the config if tmux is running.
+and symlinks the new one, builds `bin/tmuxm`, clones
+[TPM](https://github.com/tmux-plugins/tpm) if missing, and sources the config if tmux is
+running. Upgrading from the shell version, it also stops the background sampler that
+version ran — a daemon does not exit just because its script was deleted.
 
 With no arguments it picks a **random colour, but only on a machine that doesn't have one
 yet**. Re-running never changes a colour you already have — `update.sh` forwards its
@@ -81,9 +87,9 @@ repaint your machine on every update. To deliberately re-roll, use `--color rand
 ~/.tmuxm/update.sh
 ```
 
-Fast-forwards from origin, kills the running sampler so the new code is loaded, re-runs
-`install.sh` (which sources tmux and respawns the sampler), then verifies the sampler is
-alive and writing the cache. Arguments are forwarded, so `update.sh --color random` works.
+Fast-forwards from origin, re-runs `install.sh` (which rebuilds `bin/tmuxm` and sources
+tmux), then verifies the binary runs. There is no process to stop or restart. Arguments are
+forwarded, so `update.sh --color random` works.
 
 `update.sh` never re-rolls a colour on its own — it forwards to `install.sh`, which only
 picks randomly when the machine has no colour yet.
@@ -104,25 +110,20 @@ case is deliberate rather than lazy; the readings its sysfs offers are clock fre
 not utilisation, and a segment that means something different per machine is worse than no
 segment.
 
-**Presence is decided once, at install time,** and baked into the generated block — the
-same place, and for the same reason, as the colour. That is what makes the no-GPU bar
-*identical* rather than merely similar: there is no segment to hide, no `0%` to explain,
-and nothing extra runs every 2 seconds. The trade is that the bar reflects the hardware as
-of the last install, so a machine that gains a GPU needs one re-run:
+**A machine without a GPU sees no difference at all** — no segment to hide, no `0%` to
+explain. The generated `status-right` is identical on every machine; only what the binary
+prints differs.
 
-```bash
-~/.tmuxm/install.sh --color '#ff69b4'   # your existing colour; segments re-detected
-```
-
-`install.sh` and `bin/sampler.sh` share `bin/gpu.sh` rather than each testing for
-themselves. If they could disagree you would get a segment that is permanently flat.
+Presence is a **runtime** fact: the binary draws the whole metric block, so it decides on
+each refresh. A machine that gains a GPU shows it on the next redraw — no re-install, and
+nothing to keep in sync between an installer and a sampler.
 
 ### A sleeping GPU is left asleep
 
 A Max-Q laptop dGPU parks in D3cold when idle. `nvidia-smi` **wakes it**, so polling every
 2 s would hold it awake for an entire session — real battery cost for a reading that is 0%
-anyway. So the sampler checks `power/runtime_status` on the NVIDIA PCI devices first, and
-reports idle without waking anything when they are all suspended. Desktops never
+anyway. So `power/runtime_status` on the NVIDIA PCI devices is checked first, and idle is
+reported without waking anything when they are all suspended. Desktops never
 runtime-suspend and take the direct path.
 
 The devices come from sysfs (`vendor 0x10de`, PCI class `03xx`) rather than from
@@ -219,7 +220,7 @@ set -g window-status-current-style "bg=#d80088,fg=white,bold"
 set -g pane-border-style "fg=#7a004b"
 set -g pane-active-border-style "fg=#ff69b4"
 set -g status-left "#[bg=#000000,fg=#ff69b4,bold] 🧙 AI Wizard 🔮 #[bg=#000000,fg=white] "
-set -g status-right "#[bg=#000000,fg=#ff69b4] CPU #(bash ~/.tmuxm/bin/render-bar.sh cpu ff69b4) … %d/%m/%Y %H:%M #(bash ~/.tmuxm/bin/render-tz.sh) "
+set -g status-right "#[bg=#000000,fg=#ff69b4]#(~/.tmuxm/bin/tmuxm render ff69b4 7a004b) … %d/%m/%Y %H:%M #(~/.tmuxm/bin/tmuxm tz) "
 # <<< tmuxm colour <<<
 ```
 
@@ -230,10 +231,10 @@ loaded last would win. `tmux.conf` keeps only geometry (`status-left-length`,
 
 > **Why the colour argument has no `#`.** tmux expands its legacy format shorthands *inside*
 > `#(…)` before handing the command to the shell, and `#F` is one of them — window flags. So
-> `'#FBBF24'` arrives at `render-bar.sh` as `'*BBF24'`, which isn't a colour, and the bar
+> `'#FBBF24'` arrives at the binary as `'*BBF24'`, which isn't a colour, and the bar
 > silently stops changing. Lowercase `#f` happens *not* to be a shorthand, so this fails for
 > only some colours — which makes it very easy to miss. `install.sh` passes bare hex and
-> `render-bar.sh` puts the `#` back.
+> the binary puts the `#` back.
 
 Re-running `--color` rewrites **only** that block. Everything else in the file is left
 alone — `~/.tmux.local.conf` is also where per-machine bits like the `xclip` copy-pipe
@@ -249,52 +250,104 @@ backed up to `~/.tmux.local.conf.bak.<timestamp>` before the block is appended.
 
 ## Architecture
 
-Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat]):
+One binary, run by tmux on its own refresh. There is no background process.
 
 ```
-                    once per machine, pidfile-guarded
-                                │
-            ┌───────────────────▼────────────────────┐
-            │ bin/sampler.sh                         │
-            │ samples cpu/mem/bat/gpu/net every 2 s  │
-            │ writes /tmp/tmuxm-stats-$USER (~60 B)  │
-            └───────────────────┬────────────────────┘
-                                │ atomic rename
-                                ▼
-              /tmp/tmuxm-stats-$USER  (key = value, 4–7 lines)
-                                │
-            ┌───────────────────┴────────────────┐
-            │                                    │
-            ▼                                    ▼
-   bin/render-bar.sh                    bin/render-net.sh
-   (cpu|mem|bat|gpu|vram)               (in | out)
-   ~2 ms per call                       ~2 ms per call
-            │                                    │
-            └──────────────► tmux status-right ◄─┘
+   tmux status-right, every status-interval (2 s)
+        │
+        ├──► bin/tmuxm render <accent> <dim>          ~1.6 ms
+        │      ├─ /proc/stat, /proc/meminfo, /proc/net/dev      0.08 ms
+        │      ├─ NVML, when the cached reading has expired    ~21.7 ms
+        │      ├─ diff against /tmp/tmuxm-state-$USER  (monotonic ns)
+        │      └─ print the metric block, exit
+        │
+        └──► bin/tmuxm tz                             ~0.8 ms
+               └─ localtime_r().tm_gmtoff → "-3"
 ```
 
-- **One sampler per user**, no matter how many tmux servers/sessions/clients.
-  The pidfile at `/tmp/tmuxm-sampler-$USER.pid` is claimed with `set -o noclobber`, which
-  creates it atomically — a test-then-write would let two tmux servers starting in the same
-  instant both pass the check and both run. If the claim fails and the recorded PID is
-  alive, the new instance exits; if it is dead, the stale file is taken over. A sampler only
-  clears the pidfile if it still owns it, so a loser never releases the winner's claim.
-- **Stops promptly on SIGTERM** — `update.sh` stops the sampler before reloading tmux, which
-  respawns it. The handler is trapped (so tmux never logs `terminated by signal 15`) and the
-  interval `sleep` is backgrounded behind `wait`, so the signal is acted on in milliseconds
-  rather than at the end of the current sleep. Without that, the old sampler can outlive
-  `update.sh`'s wait, the replacement sees a live owner and exits, and you end up with **no
-  sampler running** and a frozen status bar.
-- **Atomic writes** — the sampler writes to `$CACHE.tmp` and renames, so renderers always
-  read a consistent file.
-- **Cross-platform** — `sampler.sh` branches on `uname -s`:
-  - Darwin: `iostat -c` (CPU), `vm_stat`, `pmset -g batt`, `netstat -ibn`
-  - Linux: `/proc/stat`, `/proc/meminfo`, `/sys/class/power_supply/BAT*`, `/proc/net/dev`,
-    optional `nvidia-smi`
-- **Fixed-width renders** — bars are always 4 chars + ` 999%` (9 chars total), throughput
-  is always 6 chars. The status bar never jitters.
-- **The bin scripts are location-independent** — they only read and write `/tmp`, so the
-  only thing tying the config to a directory is `~/.tmuxm`.
+Two processes per refresh. It used to be fourteen: seven `bash` interpreters,
+each forking an `awk` or a `date`, plus a long-lived bash daemon sampling in
+parallel.
+
+### Why there is no daemon
+
+The daemon existed for one reason: a rate needs a previous reading, and a shell
+script that exits cannot remember one. So it held a pidfile claimed under
+`noclobber`, took over stale claims, trapped `TERM` so `update.sh` could stop it,
+backgrounded its own `sleep` so the trap fired promptly, and clamped a
+deadline-based sleep at both ends so a backward clock step could not park it.
+Every one of those mechanisms was there to keep a process alive so it could
+remember four numbers.
+
+`/tmp/tmuxm-state-$USER` remembers them instead:
+
+```
+ts 103428778033098     ← CLOCK_MONOTONIC nanoseconds
+cpu_idle 197926265
+cpu_total 226071754
+net_rx 16578226068
+net_tx 2833138310
+gpu_at 103428778033098
+gpu 0
+vram 56
+```
+
+Written to a temp file and renamed, so a reader never sees a partial one. Two
+tmux servers rendering at the same instant race by design; the loser costs one
+skewed interval, never a torn read.
+
+### Monotonic time, and the bug that motivated this
+
+The shell divided byte deltas by the difference of two `date +%s` readings.
+Whole seconds cannot express the interval they measure: a real 1.05 s gap was
+still divided by 2, and the throughput came out at half. Measured
+interval-by-interval against `/proc/net/dev`, individual samples ranged from
+**0.52 to 1.27** of the true rate — accurate when integrated over a minute,
+wrong on almost every individual reading.
+
+`CLOCK_MONOTONIC` is system-wide and immune to NTP, so two separate processes
+can subtract each other's timestamps. The same audit against the binary: **0.95
+to 1.03**, with the 1.05 s intervals — the exact case that used to read 0.52 —
+landing on 0.99.
+
+### The GPU reading is cached, and why
+
+NVML is what `nvidia-smi` is built on, so reading it directly avoids a 23 ms
+fork. But in a *fresh* process NVML costs ~21.7 ms of its own, almost all of it
+mapping and relocating `libnvidia-ml.so` — a cost a daemon pays once and a
+stateless binary would pay on every refresh. Measured, that made the render
+path slower than the shell it replaced.
+
+So the reading is carried in the state file and refreshed when it is older than
+six seconds. NVML is asked on roughly every third render; the GPU number is at
+most six seconds behind, and the average render costs ~8 ms instead of 23 ms.
+
+| path | cost |
+|---|---|
+| `render`, GPU reading still fresh | **1.6 ms** |
+| `render`, NVML consulted | 23.3 ms |
+| `tz` | 0.8 ms |
+| *average at a 2 s refresh* | **~8 ms** |
+| *the shell this replaced* | 17.8 ms render **+ 32 ms daemon** |
+
+### Cross-platform
+
+`#[cfg(target_os = ...)]`, never `target_arch` — nothing in these six numbers is
+architecture-dependent. The one real trap is assuming a page size, and the macOS
+path reads it rather than assuming it.
+
+| | Linux | macOS |
+|---|---|---|
+| CPU | `/proc/stat`, fields 2..9 | `host_statistics64(HOST_CPU_LOAD_INFO)` |
+| MEM | `MemTotal - MemAvailable` | `HOST_VM_INFO64` over `sysctl hw.memsize` |
+| Net | `/proc/net/dev`, interfaces with a `/sys/class/net/<if>/device` symlink | `getifaddrs`, `if_data64`, filtered on `sdl_type` |
+| GPU | NVML via `dlopen` | not available |
+
+Two bugs the shell had to fix by hand cannot occur here, because both were
+text-parsing bugs and there is no text: `/proc/net/dev`'s 6-character name
+padding used to shift every column, and `netstat` suffixes `*` to an interface
+that is down, which silently un-skipped it. `getifaddrs` hands over a name, a
+type and two integers.
 
 ## File locations
 
@@ -303,41 +356,46 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 | `~/.tmuxm` | The clone, or a symlink to it (created by `install.sh`) |
 | `~/.tmux.conf` | Symlink → `~/.tmuxm/tmux.conf` |
 | `~/.tmux.conf.bak.<timestamp>` | Backup of a pre-existing `~/.tmux.conf` |
-| `test.sh` | Test suite — run it from anywhere, exits 0 on success |
+| `rust/` | The renderer's source |
+| `bin/tmuxm` | The built binary — **git-ignored**; every machine builds its own |
+| `test.sh` | Shell suite (installer, colour engine, generated block) |
 | `~/.tmux.local.conf` | **Per-machine colour + overrides** — not tracked in git |
 | `~/.tmux.local.conf.bak.<timestamp>` | Backup made the first time `--color` touches an existing file |
 | `~/.tmux/plugins/tpm/` | TPM (cloned by `install.sh`) |
-| `/tmp/tmuxm-stats-$USER` | Sampler cache (~60 bytes, 4–7 lines) |
-| `/tmp/tmuxm-sampler-$USER.pid` | Sampler pidfile |
+| `/tmp/tmuxm-state-$USER` | Previous sample (~8 lines); recreated if deleted |
 
 ## Requirements
 
 | Component | Version | Notes |
 |---|---|---|
-| `tmux` | ≥ 2.1 | for `run-shell -b` |
-| `bash` | ≥ 3.2 | macOS stock bash is fine |
+| `tmux` | ≥ 2.1 | |
+| `cargo` / `rustc` | **≥ 1.75** | the bar is built from source on install |
+| `bash` | ≥ 3.2 | for `install.sh` only; macOS stock bash is fine |
 | `git` | any | for the TPM clone |
-| macOS tools | `iostat`, `vm_stat`, `pmset`, `netstat` | all preinstalled |
-| Linux tools | `awk`, `cat`, `/proc`, optional `/sys/class/power_supply/` | preinstalled on any distro |
-| `nvidia-smi` | optional | only for the GPU/VRAM segments; ships with the NVIDIA driver |
-| `xclip` / `pbcopy` | optional | only if you add clipboard bindings to `~/.tmux.local.conf` |
+| `awk` | any | the OKLCH colour engine; BWK awk (macOS stock) included |
+| `nvidia-smi` driver | optional | supplies `libnvidia-ml.so`; without it, no GPU segments |
 | Terminal | UTF-8, supports `▁▂▃▄▅▆▇█`, emoji | iTerm2 / WezTerm / Ghostty / Kitty / Alacritty / GNOME Terminal all fine |
 
-Battery is omitted automatically if `/sys/class/power_supply/BAT*` doesn't exist
-(desktops, VMs) — though nothing draws it today, so that only shows up as a missing cache
-key. GPU is omitted the same way, but from the **bar itself**: see below.
+Nothing is downloaded prebuilt, so the **oldest toolchain in your fleet sets the
+floor**. The MSRV is 1.75 — what Debian and Ubuntu ship — and CI builds at
+exactly that version so it cannot drift upward by accident.
+
+A metric the machine cannot report is omitted rather than zeroed: no GPU means
+no `GPU`/`VRAM` segments at all, not a flat `0%`.
 
 ## Resource usage
 
-Steady-state on macOS (measured):
+Measured on Linux/x86_64 with an NVIDIA dGPU:
 
 | | |
 |---|---|
-| Sampler RSS | 1.7 MB |
-| Sampler CPU | ~240 ms per 2 s cycle (≈12 % of one core during the sample) |
-| Per-render cost | ~2 ms (vs ~190 ms for the previous per-refresh `top -l1`) |
-| Cache file | 50–60 bytes |
-| Process count | 1 sampler regardless of how many tmux servers/clients |
+| Processes per refresh | **2** (was 14, plus a daemon) |
+| Render, GPU reading fresh | 1.6 ms |
+| Render, NVML consulted | 23.3 ms (≈ every third refresh) |
+| Average cost per 2 s refresh | **~8 ms** (was ~50 ms) |
+| Resident processes between refreshes | **0** (was 1) |
+| Binary size | 455 KB |
+| State file | ~120 bytes |
 
 ## Keybinds (defaults from `tmux.conf`)
 
@@ -358,15 +416,22 @@ Steady-state on macOS (measured):
 ```
 tmuxm/
 ├── tmux.conf              # main config — symlinked to ~/.tmux.conf
-├── install.sh             # installer + --color, OKLCH colour engine
-├── update.sh              # pull, restart sampler, verify
-├── test.sh                # test suite
-├── bin/
-│   ├── sampler.sh         # background daemon, writes cache
-│   ├── gpu.sh             # NVIDIA detect + sample, shared with install.sh
-│   ├── render-bar.sh      # cpu/mem/bat/gpu/vram → bar in the machine colour
-│   ├── render-net.sh      # net throughput → fixed-width string
-│   └── render-tz.sh       # UTC offset → "-3"
+├── install.sh             # installer + --color, OKLCH colour engine, cargo build
+├── update.sh              # pull, rebuild, verify
+├── test.sh                # shell suite; runs the Rust suite too
+├── rust/
+│   ├── Cargo.toml
+│   └── src/
+│       ├── main.rs        # render | tz
+│       ├── bar.rs         # blocks, gauges, throughput, offset
+│       ├── state.rs       # the previous sample
+│       ├── gpu.rs         # NVML via dlopen
+│       └── metrics/
+│           ├── mod.rs     # rates and percentages
+│           ├── linux.rs   # /proc, /sys
+│           ├── darwin.rs  # macOS arithmetic — built everywhere, so it is tested
+│           └── macos.rs   # macOS syscalls
+├── .github/workflows/ci.yml
 ├── .gitignore
 └── README.md
 ```
