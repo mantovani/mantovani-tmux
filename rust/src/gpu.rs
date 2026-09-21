@@ -104,6 +104,7 @@ mod imp {
     type ByIndex = unsafe extern "C" fn(u32, *mut Handle) -> i32;
     type GetUtil = unsafe extern "C" fn(Handle, *mut Utilization) -> i32;
     type GetMem = unsafe extern "C" fn(Handle, *mut Memory) -> i32;
+    type GetMemV2 = unsafe extern "C" fn(Handle, *mut MemoryV2) -> i32;
 
     #[repr(C)]
     #[derive(Default)]
@@ -116,6 +117,23 @@ mod imp {
     #[derive(Default)]
     struct Memory {
         total: u64,
+        free: u64,
+        used: u64,
+    }
+
+    /// The v2 memory struct, which splits driver-reserved memory out of `used`.
+    ///
+    /// This distinction is not cosmetic. v1 reports `used = total - free`, so
+    /// the driver's own reservation — 390 MiB on this card — counts as memory
+    /// someone is using. nvidia-smi reports the v2 figure, so v1 reads about
+    /// 4.5 points higher than every other tool on the machine, including the
+    /// shell implementation this replaced.
+    #[repr(C)]
+    #[derive(Default)]
+    struct MemoryV2 {
+        version: u32,
+        total: u64,
+        reserved: u64,
         free: u64,
         used: u64,
     }
@@ -153,6 +171,15 @@ mod imp {
         let by_index = sym!("nvmlDeviceGetHandleByIndex_v2", ByIndex);
         let get_util = sym!("nvmlDeviceGetUtilizationRates", GetUtil);
         let get_mem = sym!("nvmlDeviceGetMemoryInfo", GetMem);
+        // Preferred, but absent on older drivers, so its absence is not fatal.
+        let get_mem_v2: Option<GetMemV2> = {
+            let n = std::ffi::CString::new("nvmlDeviceGetMemoryInfo_v2").ok()?;
+            // SAFETY: `h` is a live handle from dlopen and `n` is NUL-terminated.
+            let p = unsafe { libc::dlsym(h, n.as_ptr()) };
+            (!p.is_null())
+                // SAFETY: the signature is NVML's documented v2 ABI.
+                .then(|| unsafe { std::mem::transmute::<*mut c_void, GetMemV2>(p) })
+        };
 
         // SAFETY: each call follows NVML's contract — init first, handles come
         // from by_index, and every out-pointer is a live local.
@@ -171,11 +198,30 @@ mod imp {
                     continue;
                 }
                 let mut u = Utilization::default();
-                let mut m = Memory::default();
-                if get_util(dev, &mut u) != 0 || get_mem(dev, &mut m) != 0 {
+                if get_util(dev, &mut u) != 0 {
                     continue; // a card that cannot report is skipped, not zeroed
                 }
-                cards.push((u.gpu, m.used, m.total));
+                // v2 where the driver has it, so `used` excludes the driver's
+                // own reservation and agrees with nvidia-smi.
+                let mem = match get_mem_v2 {
+                    Some(f) => {
+                        let mut m = MemoryV2 {
+                            version: (std::mem::size_of::<MemoryV2>() as u32) | (2 << 24),
+                            ..Default::default()
+                        };
+                        (f(dev, &mut m) == 0).then_some((m.used, m.total))
+                    }
+                    None => None,
+                };
+                let mem = match mem {
+                    Some(v) => Some(v),
+                    None => {
+                        let mut m = Memory::default();
+                        (get_mem(dev, &mut m) == 0).then_some((m.used, m.total))
+                    }
+                };
+                let Some((used, total)) = mem else { continue };
+                cards.push((u.gpu, used, total));
             }
             // nvmlShutdown is deliberately NOT called. It costs ~3.5 ms of the
             // ~14 ms this whole path takes, and the process is about to exit —

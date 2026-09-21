@@ -130,6 +130,17 @@ The devices come from sysfs (`vendor 0x10de`, PCI class `03xx`) rather than from
 `nvidia-smi --query-gpu=pci.bus_id`, which prints an 8-digit domain (`00000000:01:00.0`)
 where sysfs writes four (`0000:01:00.0`).
 
+### VRAM means what nvidia-smi means by it
+
+NVML has two memory calls and they disagree. `nvmlDeviceGetMemoryInfo` reports
+`used = total - free`, which counts the driver's own reservation — 390 MiB on
+this card — as memory somebody is using. `nvmlDeviceGetMemoryInfo_v2` separates
+that out, and it is the figure `nvidia-smi` prints.
+
+The v1 number reads about 4.5 points higher than every other tool on the
+machine, so v2 is used where the driver has it, falling back to v1 on older
+drivers rather than losing the segment.
+
 ### Several cards, and cards that won't answer
 
 `GPU` is the **busiest** card (is anything running?) and `VRAM` is the **pooled** total
@@ -394,7 +405,7 @@ Measured on Linux/x86_64 with an NVIDIA dGPU:
 | Render, NVML consulted | 23.3 ms (≈ every third refresh) |
 | Average cost per 2 s refresh | **~8 ms** (was ~50 ms) |
 | Resident processes between refreshes | **0** (was 1) |
-| Binary size | 455 KB |
+| Binary size | 458 KB |
 | State file | ~120 bytes |
 
 ## Keybinds (defaults from `tmux.conf`)
