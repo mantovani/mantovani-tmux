@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Render this machine's UTC offset for the status bar: "-3 GMT", "+5:30 GMT",
-# "0 GMT".
+# Render this machine's UTC offset for the status bar: "-3", "+5:30", "0".
 #
 # tmux's strftime does offer %z, but it only produces "-0300". Rendering it here
 # instead of baking the offset in at install time means DST transitions are
@@ -14,9 +13,9 @@ h=$(( 10#${z:1:2} ))               # 10# so 08/09 aren't read as bad octal
 m=$(( 10#${z:3:2} ))
 
 if [ "$h" -eq 0 ] && [ "$m" -eq 0 ]; then
-  printf '0 GMT'
+  printf '0'
 elif [ "$m" -eq 0 ]; then
-  printf '%s%d GMT' "$sign" "$h"
+  printf '%s%d' "$sign" "$h"
 else
-  printf '%s%d:%02d GMT' "$sign" "$h" "$m"
+  printf '%s%d:%02d' "$sign" "$h" "$m"
 fi

@@ -239,12 +239,12 @@ fi
 
 echo
 echo "=== 12c. Timezone offset renders in the requested format ==="
-chk "America/Sao_Paulo" "$(TZ=America/Sao_Paulo bash "$REPO/bin/render-tz.sh")" "-3 GMT"
-chk "UTC"               "$(TZ=UTC               bash "$REPO/bin/render-tz.sh")" "0 GMT"
-chk "Asia/Kolkata (half-hour offset)" "$(TZ=Asia/Kolkata bash "$REPO/bin/render-tz.sh")" "+5:30 GMT"
-chk "Pacific/Chatham (45-min offset)" "$(TZ=Pacific/Chatham bash "$REPO/bin/render-tz.sh")" "+12:45 GMT"
+chk "America/Sao_Paulo" "$(TZ=America/Sao_Paulo bash "$REPO/bin/render-tz.sh")" "-3"
+chk "UTC"               "$(TZ=UTC               bash "$REPO/bin/render-tz.sh")" "0"
+chk "Asia/Kolkata (half-hour offset)" "$(TZ=Asia/Kolkata bash "$REPO/bin/render-tz.sh")" "+5:30"
+chk "Pacific/Chatham (45-min offset)" "$(TZ=Pacific/Chatham bash "$REPO/bin/render-tz.sh")" "+12:45"
 # A leading 0 in the hour field must not be read as octal.
-chk "Asia/Tokyo (+0900, octal trap)" "$(TZ=Asia/Tokyo bash "$REPO/bin/render-tz.sh")" "+9 GMT"
+chk "Asia/Tokyo (+0900, octal trap)" "$(TZ=Asia/Tokyo bash "$REPO/bin/render-tz.sh")" "+9"
 
 echo
 echo "=== 13. tmux.conf defines no colours (single source of truth) ==="

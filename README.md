@@ -8,8 +8,8 @@ Cross-platform (macOS & Linux).
 ## What it looks like
 
 ```
- 🧙 AI Wizard 🔮 │ 1:zsh* 2:vim 3:logs        CPU █▁▁▁  23% │ MEM ███▂  79% │ ↓ 99.3K ↑  1.9K │ @host │ 25/05/2026 13:14 -3 GMT
-└── status-left ─┘└─── window list ────┘         └──────────────────── status-right (metrics) ─────────────────────────┘
+ 🧙 AI Wizard 🔮 │ 1:zsh* 2:vim 3:logs        CPU █▁▁▁  23% │ MEM ███▂  79% │ ↓ 99.3K ↑  1.9K │ @host │ 25/05/2026 13:14 -3
+└── status-left ─┘└─── window list ────┘         └──────────────────── status-right (metrics) ─────────────────────┘
    black end-cap      machine colour                          black end-cap, machine colour
 ```
 
@@ -35,7 +35,7 @@ placeholder, no flat `0%`. See [GPU and VRAM](#gpu-and-vram).
 | CPU/MEM/GPU/VRAM bars | the accent — the *same* at 1% and at 100% |
 | Net throughput | the accent. Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
 | `@host` | the accent, bold |
-| Date + UTC offset | the accent, bold. European `dd/mm/yyyy hh:mm`, then `-3 GMT` |
+| Date + UTC offset | the accent, bold. European `dd/mm/yyyy hh:mm`, then the UTC offset `-3` |
 | `│` separators, pane borders | the accent, dimmed |
 
 **Black is the only fixed colour in the theme.** Everything else on the bar is that one
@@ -43,7 +43,7 @@ machine colour or a shade derived from it.
 
 Under load the bars fill; the colour does not change:
 ```
- 🧙 AI Wizard 🔮 │ windows…        CPU ███▅  88% │ MEM ████  95% │ ↓18.4M ↑ 2.1M │ @host │ 25/05/2026 13:14 -3 GMT
+ 🧙 AI Wizard 🔮 │ windows…        CPU ███▅  88% │ MEM ████  95% │ ↓18.4M ↑ 2.1M │ @host │ 25/05/2026 13:14 -3
 ```
 
 ## Install
@@ -366,7 +366,7 @@ tmuxm/
 │   ├── gpu.sh             # NVIDIA detect + sample, shared with install.sh
 │   ├── render-bar.sh      # cpu/mem/bat/gpu/vram → bar in the machine colour
 │   ├── render-net.sh      # net throughput → fixed-width string
-│   └── render-tz.sh       # UTC offset → "-3 GMT"
+│   └── render-tz.sh       # UTC offset → "-3"
 ├── .gitignore
 └── README.md
 ```
