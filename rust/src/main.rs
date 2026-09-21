@@ -10,6 +10,9 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::unwrap_used, clippy::expect_used)]
+// ...on the render path. In tests an unwrap IS the assertion: wrapping it in a
+// match would only hide which line failed.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 mod bar;
 mod gpu;
@@ -121,6 +124,10 @@ fn utc_offset_secs() -> i64 {
         if libc::localtime_r(&t, &mut tm).is_null() {
             return 0;
         }
-        tm.tm_gmtoff as i64
+        // tm_gmtoff is c_long: i64 on every target this builds for today, i32
+        // on a 32-bit one. Clippy sees only the former and calls the conversion
+        // useless. Keeping it is what stops this file growing a target_arch cfg.
+        #[allow(clippy::useless_conversion)]
+        i64::from(tm.tm_gmtoff)
     }
 }

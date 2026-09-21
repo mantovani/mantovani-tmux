@@ -23,9 +23,15 @@ pub struct Iface {
 
 pub const IFT_ETHER: u8 = 0x06;
 pub const IFT_IEEE80211: u8 = 0x47;
+// Named, not inlined into the tests: these are the kinds `is_physical` rejects,
+// and writing 0x18 at a call site says nothing. Nothing in the shipping path
+// reads them — the filter is an allow-list — so they are dead outside tests.
+#[allow(dead_code)]
 pub const IFT_LOOP: u8 = 0x18;
+#[allow(dead_code)]
 pub const IFT_BRIDGE: u8 = 0xd1;
 /// utun, ipsec, gif, stf all land here.
+#[allow(dead_code)]
 pub const IFT_OTHER: u8 = 0x01;
 
 /// Overlay devices that nevertheless report themselves as Ethernet, so the

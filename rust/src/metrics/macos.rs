@@ -9,6 +9,11 @@
 //! the sampler had to be a daemon on macOS at all.
 
 #![allow(non_camel_case_types)]
+// libc deprecates mach_host_self in favour of the mach2 crate. One extra
+// dependency, built on every machine, for a single symbol that is not going
+// anywhere, is the wrong trade — every other dependency here was rejected for
+// less.
+#![allow(deprecated)]
 
 use super::darwin::{self, Iface};
 use super::Counters;

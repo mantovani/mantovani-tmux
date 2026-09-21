@@ -10,6 +10,10 @@
 //! utilisation, and a segment meaning something different per machine is worse
 //! than no segment.
 
+// Off Linux there is no NVML to call, so the sysfs helpers below have no
+// caller but the tests. Built anyway, so they stay compiled and covered.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use std::path::{Path, PathBuf};
 
 /// `(utilisation %, VRAM used %)`, or `None` on any machine that cannot answer.
