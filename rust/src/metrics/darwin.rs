@@ -99,7 +99,12 @@ mod tests {
     use super::*;
 
     fn i(name: &str, t: u8, rx: u64, tx: u64) -> Iface {
-        Iface { name: name.to_string(), if_type: t, rx, tx }
+        Iface {
+            name: name.to_string(),
+            if_type: t,
+            rx,
+            tx,
+        }
     }
 
     #[test]
@@ -120,7 +125,10 @@ mod tests {
         assert!(!is_physical("vmenet0", IFT_ETHER));
         // ...but a real interface whose name merely starts the same way is not.
         assert!(is_physical("ap", IFT_ETHER) || !is_physical("ap", IFT_ETHER));
-        assert!(is_physical("apple9", IFT_ETHER), "only <prefix><digits> matches");
+        assert!(
+            is_physical("apple9", IFT_ETHER),
+            "only <prefix><digits> matches"
+        );
     }
 
     /// Shell section 15, carried over: the fixture marks a real NIC down as
@@ -144,7 +152,10 @@ mod tests {
     #[test]
     fn memory_is_a_fraction_of_real_ram() {
         // Shell section 16: (100000+50000+50000) pages * 16384 / 8589934592.
-        assert_eq!(mem_percent(100_000, 50_000, 50_000, 16384, 8_589_934_592), Some(38));
+        assert_eq!(
+            mem_percent(100_000, 50_000, 50_000, 16384, 8_589_934_592),
+            Some(38)
+        );
         // The six-counter sum would have said 80%.
         assert_eq!(mem_percent(1, 1, 1, 4096, 0), None);
         assert_eq!(mem_percent(1, 1, 1, 0, 4096), None);

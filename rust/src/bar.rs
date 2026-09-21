@@ -148,7 +148,18 @@ mod tests {
         assert_eq!(throughput(1258291), "  1.2M");
         assert_eq!(throughput(3_650_722_201), "  3.4G");
         assert_eq!(throughput(u64::MAX), "999.9T", "saturates, never widens");
-        for b in [0u64, 1, 1023, 1024, 99999, 1 << 20, 1 << 30, 1 << 40, u64::MAX / 2, u64::MAX] {
+        for b in [
+            0u64,
+            1,
+            1023,
+            1024,
+            99999,
+            1 << 20,
+            1 << 30,
+            1 << 40,
+            u64::MAX / 2,
+            u64::MAX,
+        ] {
             assert_eq!(throughput(b).chars().count(), 6, "at {b} B/s");
         }
     }
@@ -165,7 +176,13 @@ mod tests {
 
     #[test]
     fn no_gpu_emits_no_gpu_segment() {
-        let m = Metrics { cpu: 7, mem: 54, net_in: 0, net_out: 0, ..Default::default() };
+        let m = Metrics {
+            cpu: 7,
+            mem: 54,
+            net_in: 0,
+            net_out: 0,
+            ..Default::default()
+        };
         let out = block("ff69b4", "7a004b", &m);
         assert!(!out.contains("GPU"), "{out}");
         assert!(!out.contains("VRAM"), "{out}");

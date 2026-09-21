@@ -71,14 +71,21 @@ fn render(accent: &str, dim: &str) -> String {
         None => gpu::sample(),
     };
     let gpu_at = match prev.as_ref().and_then(|p| p.fresh_gpu(now_ts)) {
-        Some(_) => prev.as_ref().and_then(|p| p.gpu).map(|g| g.at).unwrap_or(now_ts),
+        Some(_) => prev
+            .as_ref()
+            .and_then(|p| p.gpu)
+            .map(|g| g.at)
+            .unwrap_or(now_ts),
         None => now_ts,
     };
 
     state::save(&state::State {
         ts: now_ts,
         counters: now_counters,
-        gpu: Some(state::GpuSample { at: gpu_at, reading }),
+        gpu: Some(state::GpuSample {
+            at: gpu_at,
+            reading,
+        }),
     });
 
     let (gpu, vram) = match reading {
@@ -89,7 +96,14 @@ fn render(accent: &str, dim: &str) -> String {
     bar::block(
         accent,
         dim,
-        &Metrics { cpu, mem: metrics::mem_percent().unwrap_or(0), gpu, vram, net_in, net_out },
+        &Metrics {
+            cpu,
+            mem: metrics::mem_percent().unwrap_or(0),
+            gpu,
+            vram,
+            net_in,
+            net_out,
+        },
     )
 }
 

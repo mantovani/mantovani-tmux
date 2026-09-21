@@ -18,7 +18,12 @@ pub fn counters() -> Counters {
     let (net_rx, net_tx) = fs::read_to_string("/proc/net/dev")
         .map(|s| parse_net_dev(&s, &want))
         .unwrap_or((0, 0));
-    Counters { cpu_idle, cpu_total, net_rx, net_tx }
+    Counters {
+        cpu_idle,
+        cpu_total,
+        net_rx,
+        net_tx,
+    }
 }
 
 pub fn mem_percent() -> Option<u32> {
@@ -110,7 +115,9 @@ pub fn parse_net_dev(s: &str, want: &[String]) -> (u64, u64) {
     let mut rx = 0u64;
     let mut tx = 0u64;
     for line in s.lines().skip(2) {
-        let Some((name, rest)) = line.split_once(':') else { continue };
+        let Some((name, rest)) = line.split_once(':') else {
+            continue;
+        };
         let name = name.trim();
         if name == "lo" {
             continue;
@@ -140,8 +147,16 @@ mod tests {
     fn steal_counts_toward_busy_not_idle() {
         let (i0, t0) = parse_stat(STAT_A).unwrap();
         let (i1, t1) = parse_stat(STAT_B).unwrap();
-        let prev = Counters { cpu_idle: i0, cpu_total: t0, ..Default::default() };
-        let now = Counters { cpu_idle: i1, cpu_total: t1, ..Default::default() };
+        let prev = Counters {
+            cpu_idle: i0,
+            cpu_total: t0,
+            ..Default::default()
+        };
+        let now = Counters {
+            cpu_idle: i1,
+            cpu_total: t1,
+            ..Default::default()
+        };
         // 900 idle of 1200 total delta => 25% busy. Omitting steal says 10%.
         assert_eq!(super::super::cpu_percent(&prev, &now), 25);
     }
@@ -149,13 +164,20 @@ mod tests {
     #[test]
     fn parse_stat_ignores_per_core_lines() {
         assert_eq!(parse_stat(STAT_A), Some((900, 1000)));
-        assert_eq!(parse_stat("cpu0 1 2 3 4 5 6 7 8\n"), None, "no aggregate line");
+        assert_eq!(
+            parse_stat("cpu0 1 2 3 4 5 6 7 8\n"),
+            None,
+            "no aggregate line"
+        );
     }
 
     #[test]
     fn parse_stat_excludes_guest_columns() {
         // guest=500, guest_nice=500 must NOT be summed; total stays 1000.
-        assert_eq!(parse_stat("cpu  100 0 0 900 0 0 0 0 500 500\n"), Some((900, 1000)));
+        assert_eq!(
+            parse_stat("cpu  100 0 0 900 0 0 0 0 500 500\n"),
+            Some((900, 1000))
+        );
     }
 
     #[test]
@@ -187,8 +209,14 @@ docker0: 900000   400    0    0    0     0          0         0   400000    400
     fn padding_does_not_shift_columns() {
         // wlo1 is padded, enp1s0 is not. If the padding shifted fields we would
         // read packets (200/300) instead of bytes on one of them.
-        assert_eq!(parse_net_dev(NET_DEV, &["wlo1".to_string()]), (2_000_000, 1_000_000));
-        assert_eq!(parse_net_dev(NET_DEV, &["enp1s0".to_string()]), (10_000_000, 3_000_000));
+        assert_eq!(
+            parse_net_dev(NET_DEV, &["wlo1".to_string()]),
+            (2_000_000, 1_000_000)
+        );
+        assert_eq!(
+            parse_net_dev(NET_DEV, &["enp1s0".to_string()]),
+            (10_000_000, 3_000_000)
+        );
     }
 
     #[test]

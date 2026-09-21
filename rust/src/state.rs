@@ -54,7 +54,10 @@ pub fn path() -> PathBuf {
 
 /// Monotonic nanoseconds since boot.
 pub fn now() -> u128 {
-    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
     // SAFETY: `ts` is a live timespec, which is all clock_gettime writes.
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     ts.tv_sec as u128 * 1_000_000_000 + ts.tv_nsec as u128
@@ -147,8 +150,14 @@ mod tests {
     fn round_trips() {
         for gpu in [
             None,
-            Some(GpuSample { at: 5, reading: Some((9, 56)) }),
-            Some(GpuSample { at: 5, reading: None }),
+            Some(GpuSample {
+                at: 5,
+                reading: Some((9, 56)),
+            }),
+            Some(GpuSample {
+                at: 5,
+                reading: None,
+            }),
         ] {
             let st = sample(gpu);
             let back = parse(&render(&st)).expect("round trip");
@@ -163,14 +172,27 @@ mod tests {
         // "asked, nothing there" must survive the round trip distinctly from
         // "never asked", or a machine with no GPU pays NVML on every refresh.
         let never = parse(&render(&sample(None))).unwrap();
-        let asked = parse(&render(&sample(Some(GpuSample { at: 7, reading: None })))).unwrap();
+        let asked = parse(&render(&sample(Some(GpuSample {
+            at: 7,
+            reading: None,
+        }))))
+        .unwrap();
         assert!(never.gpu.is_none());
-        assert_eq!(asked.gpu, Some(GpuSample { at: 7, reading: None }));
+        assert_eq!(
+            asked.gpu,
+            Some(GpuSample {
+                at: 7,
+                reading: None
+            })
+        );
     }
 
     #[test]
     fn gpu_reading_expires() {
-        let st = sample(Some(GpuSample { at: 1_000, reading: Some((9, 56)) }));
+        let st = sample(Some(GpuSample {
+            at: 1_000,
+            reading: Some((9, 56)),
+        }));
         assert_eq!(st.fresh_gpu(1_000), Some(Some((9, 56))), "just taken");
         assert_eq!(st.fresh_gpu(1_000 + GPU_TTL_NANOS - 1), Some(Some((9, 56))));
         assert_eq!(st.fresh_gpu(1_000 + GPU_TTL_NANOS), None, "expired");
@@ -181,7 +203,10 @@ mod tests {
     fn a_backward_clock_expires_rather_than_sticks() {
         // now < at can only mean the state file outlived a reboot. Re-ask
         // rather than trusting a reading from a previous boot forever.
-        let st = sample(Some(GpuSample { at: 10_000, reading: Some((9, 56)) }));
+        let st = sample(Some(GpuSample {
+            at: 10_000,
+            reading: Some((9, 56)),
+        }));
         assert_eq!(st.fresh_gpu(5_000), None);
     }
 

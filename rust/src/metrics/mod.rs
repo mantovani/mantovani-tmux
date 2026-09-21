@@ -74,7 +74,11 @@ mod tests {
     use super::*;
 
     fn c(idle: u64, total: u64) -> Counters {
-        Counters { cpu_idle: idle, cpu_total: total, ..Default::default() }
+        Counters {
+            cpu_idle: idle,
+            cpu_total: total,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -88,7 +92,11 @@ mod tests {
     #[test]
     fn cpu_degrades_rather_than_spikes() {
         assert_eq!(cpu_percent(&c(0, 0), &c(0, 0)), 0, "no previous sample");
-        assert_eq!(cpu_percent(&c(500, 900), &c(0, 0)), 0, "counter went backwards");
+        assert_eq!(
+            cpu_percent(&c(500, 900), &c(0, 0)),
+            0,
+            "counter went backwards"
+        );
     }
 
     #[test]

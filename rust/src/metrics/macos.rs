@@ -114,7 +114,9 @@ fn ifaces() -> Vec<Iface> {
             }
             let dl = &*(e.ifa_addr as *const libc::sockaddr_dl);
             let data = &*(e.ifa_data as *const libc::if_data64);
-            let Ok(name) = CStr::from_ptr(e.ifa_name).to_str() else { continue };
+            let Ok(name) = CStr::from_ptr(e.ifa_name).to_str() else {
+                continue;
+            };
             out.push(Iface {
                 name: name.to_string(),
                 if_type: dl.sdl_type,
@@ -130,5 +132,10 @@ fn ifaces() -> Vec<Iface> {
 pub fn counters() -> Counters {
     let (cpu_idle, cpu_total) = cpu();
     let (net_rx, net_tx) = darwin::sum_net(&ifaces());
-    Counters { cpu_idle, cpu_total, net_rx, net_tx }
+    Counters {
+        cpu_idle,
+        cpu_total,
+        net_rx,
+        net_tx,
+    }
 }

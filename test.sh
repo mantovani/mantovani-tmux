@@ -21,7 +21,20 @@ newhome() {
   mkdir -p "$h/.tmux/plugins/tpm" "$h/tmuxtmp"   # pre-made TPM dir skips the clone
   printf '%s' "$h"
 }
-run() { local h="$1"; shift; HOME="$h" TMUX_TMPDIR="$h/tmuxtmp" "$REPO/install.sh" "$@" 2>&1; }
+# install.sh builds the renderer, so cargo has to keep working while HOME is
+# redirected. With rustup, `cargo` is a shim that finds its toolchain through
+# HOME — override it and the build dies with "could not choose a version of
+# cargo to run", which is invisible here because most callers discard output.
+# A system cargo (/usr/bin/cargo) does not care, which is exactly why this
+# passed locally and failed in CI.
+REAL_HOME="$HOME"
+run() {
+  local h="$1"; shift
+  HOME="$h" TMUX_TMPDIR="$h/tmuxtmp" \
+    CARGO_HOME="${CARGO_HOME:-$REAL_HOME/.cargo}" \
+    RUSTUP_HOME="${RUSTUP_HOME:-$REAL_HOME/.rustup}" \
+    "$REPO/install.sh" "$@" 2>&1
+}
 
 # The colour engine, extracted from install.sh so the tests exercise the real
 # implementation rather than a copy of it.
@@ -271,7 +284,9 @@ echo
 
 echo "=== 14. The generated bar calls the binary, not the old scripts ==="
 H="$(newhome)"
-run "$H" --color '#ff69b4' >/dev/null
+if ! out14="$(run "$H" --color '#ff69b4')"; then
+  bad "install.sh failed in a sandboxed HOME:"; printf '%s\n' "$out14" | sed 's/^/      /'
+fi
 sr="$(awk '/^set -g status-right /{sub(/^set -g status-right "/,""); sub(/"$/,""); print}' "$H/.tmux.local.conf")"
 chk "one render call"            "$(printf '%s' "$sr" | grep -c 'tmuxm render ff69b4 7a004b)')" "1"
 chk "one tz call"                "$(printf '%s' "$sr" | grep -c 'tmuxm tz)')" "1"
