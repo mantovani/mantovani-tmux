@@ -304,7 +304,10 @@ chmod +x "$STUBS/yes/nvidia-smi" "$STUBS/no/nvidia-smi"
 # the answer always comes from the stub rather than from the shortcut that
 # deliberately avoids waking a parked dGPU.
 srline() {  # srline <stubdir> <home>
-  NVIDIA_SYSFS_DIR="$STUBS/sysfs" PATH="$1:$PATH" HOME="$2" TMUX_TMPDIR="$2/tmuxtmp" \
+  # TMUXM_OS pins the platform: gpu_sample returns early on anything but Linux,
+  # so without it these four assertions could only ever run on Linux and would
+  # silently report "no GPU" everywhere else.
+  TMUXM_OS=Linux NVIDIA_SYSFS_DIR="$STUBS/sysfs" PATH="$1:$PATH" HOME="$2" TMUX_TMPDIR="$2/tmuxtmp" \
     "$REPO/install.sh" --color '#ff69b4' >/dev/null 2>&1
   awk '/^set -g status-right /{sub(/^set -g status-right "/,""); sub(/"$/,""); print}' "$2/.tmux.local.conf"
 }
@@ -355,14 +358,196 @@ printf '#!/bin/sh\necho WOKE-THE-GPU >&2\necho "99, 8000, 8188"\n' > "$FAKE/bin/
 chmod +x "$FAKE/bin/nvidia-smi"
 
 printf 'suspended\n' > "$FAKE/dev/0000:01:00.0/power/runtime_status"
-got="$(NVIDIA_SYSFS_DIR="$FAKE/dev" PATH="$FAKE/bin:$PATH" bash -c '. "'"$REPO"'/bin/gpu.sh"; gpu_sample' 2>"$FAKE/err")"
+got="$(TMUXM_OS=Linux NVIDIA_SYSFS_DIR="$FAKE/dev" PATH="$FAKE/bin:$PATH" bash -c '. "'"$REPO"'/bin/gpu.sh"; gpu_sample' 2>"$FAKE/err")"
 chk "suspended: reports idle"        "$got"              "0 0"
 chk "suspended: nvidia-smi not run"  "$(cat "$FAKE/err")" ""
 
 printf 'active\n' > "$FAKE/dev/0000:01:00.0/power/runtime_status"
-got="$(NVIDIA_SYSFS_DIR="$FAKE/dev" PATH="$FAKE/bin:$PATH" bash -c '. "'"$REPO"'/bin/gpu.sh"; gpu_sample' 2>/dev/null)"
+got="$(TMUXM_OS=Linux NVIDIA_SYSFS_DIR="$FAKE/dev" PATH="$FAKE/bin:$PATH" bash -c '. "'"$REPO"'/bin/gpu.sh"; gpu_sample' 2>/dev/null)"
 chk "active: polled, util + pooled vram" "$got" "99 97"
 rm -rf "$FAKE"
+
+echo
+echo "=== 14e. sampler.sh can be sourced without becoming a sampler ==="
+# Sections 15-18 drive the readers by sourcing the file. If sourcing ever starts
+# the loop they do not fail — they HANG, inside a command substitution, which is
+# the one outcome a suite must never produce. So the boundary is proven here,
+# with a deadline, before anything depends on it.
+TUB="tmuxmsrc$$"
+USER="$TUB" bash -c '. "'"$REPO"'/bin/sampler.sh"' & sp=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$sp" 2>/dev/null || break; sleep 0.3; done
+if kill -0 "$sp" 2>/dev/null; then
+  bad "sourcing sampler.sh entered the loop"; kill -9 "$sp" 2>/dev/null
+else
+  ok "sourcing returns at the library boundary"
+fi
+wait "$sp" 2>/dev/null
+if [ ! -f "/tmp/tmuxm-sampler-${TUB}.pid" ]; then ok "sourcing claimed no pidfile"
+else bad "sourcing claimed a pidfile"; fi
+rm -f "/tmp/tmuxm-sampler-${TUB}.pid" "/tmp/tmuxm-stats-${TUB}"
+
+echo
+echo "=== 14f. The sampler writes no key the bar cannot render ==="
+# bat was sampled every interval and written here for a segment that was never
+# generated. A key nothing reads cannot be seen to rot — which is exactly how
+# the down-interface bug in section 15 shipped invisibly. This also proves the
+# deadline loop still completes an iteration and writes within a bounded time.
+TUK="tmuxmkey$$"; kc="/tmp/tmuxm-stats-${TUK}"; kp="/tmp/tmuxm-sampler-${TUK}.pid"
+rm -f "$kc" "$kp"
+USER="$TUK" bash "$REPO/bin/sampler.sh" & sp=$!
+for _ in $(seq 1 40); do [ -s "$kc" ] && break; sleep 0.25; done
+kill -TERM "$sp" 2>/dev/null; wait "$sp" 2>/dev/null
+if [ -s "$kc" ]; then
+  chk "every key has a renderer" \
+    "$(awk '{print $1}' "$kc" | grep -vcE '^(cpu|mem|gpu|vram|net_in|net_out)$')" "0"
+else
+  bad "sampler wrote no cache within 10s"
+fi
+rm -f "$kc" "$kp"
+
+echo
+echo "=== 15. Interface selection survives an interface going down ==="
+# netstat suffixes '*' to an interface that is not UP, and the skip-list is
+# anchored on '$' — so the moment a skipped interface goes down it stops being
+# skipped and its CUMULATIVE counter joins the sum. The next delta then reports
+# an entire session's traffic as one interval's throughput.
+#
+# awdl0 is the case that actually bites: AirDrop cycles its radio up and down
+# routinely, and it carries a link-layer address, so its $7 is a real byte
+# counter (13 MB on the machine this was written on). A down tunnel is the
+# milder variant — utun rows have no address, so every field after Network
+# shifts left and $7/$10 land on Opkts/Coll; still wrong, just smaller.
+#
+# Both snapshots hold identical counters for everything except en0, which grows
+# by 100 bytes. 100 is therefore the only correct answer in either state.
+#
+# Stubbing netstat on PATH is the technique section 14d uses for nvidia-smi;
+# Sourcing stops at sampler.sh's library boundary, so the readers can be
+# driven without claiming the pidfile or entering the loop.
+NS="$(mktemp -d "${TMPDIR:-/tmp}/tmuxm-ns.XXXXXX")"
+mkdir -p "$NS/bin"
+printf '#!/bin/sh\ncat "$NETSTAT_FIXTURE"\n' > "$NS/bin/netstat"
+chmod +x "$NS/bin/netstat"
+
+cat > "$NS/up" <<'EOS'
+Name  Mtu   Network       Address            Ipkts Ierrs     Ibytes     Opkts Oerrs     Obytes  Coll
+en0   1500  <Link#1>      aa:bb:cc:dd:ee:00  1000  0         1000000000 500   0         2000000 0
+en5   1500  <Link#9>      cc:dd:ee:ff:00:11  50    0         400000     25    0         100000  0
+awdl0 1484  <Link#13>     bb:cc:dd:ee:ff:00  300   0         12996610   100   0         9650603 0
+utun5 1380  <Link#12>                        400   0         500000000  200   0         7000    0
+EOS
+# Same counters; en0 +100, and three interfaces now marked down. en5 is the row
+# that discriminates: it is a real NIC, so going down must NOT remove it from
+# the sum. Without it this section passes just as happily under "skip every
+# marked row", which has the same bug with the sign reversed — a NIC that came
+# back up would rejoin carrying its whole cumulative counter.
+sed -e 's/1000000000/1000000100/' \
+    -e 's/^awdl0 /awdl0* /' \
+    -e 's/^utun5 /utun5* /' \
+    -e 's/^en5   /en5*  /'  "$NS/up" > "$NS/down"
+
+netsum() { NETSTAT_FIXTURE="$1" PATH="$NS/bin:$PATH" TMUXM_OS=Darwin \
+  bash -c '. "'"$REPO"'/bin/sampler.sh"; read_net_bytes'; }
+up="$(netsum "$NS/up")"; down="$(netsum "$NS/down")"
+chk "up: overlays excluded"        "$up"   "1000400000 2100000"
+chk "down: NIC kept, overlays not" "$down" "1000400100 2100000"
+chk "no phantom spike on the flip" "$(( ${down%% *} - ${up%% *} ))" "100"
+rm -rf "$NS"
+
+echo "=== 15b. Linux throughput reads bytes, on physical interfaces only ==="
+# /proc/net/dev right-pads short names, so the columns are only positional once
+# the name's colon is turned into a space. Long and short names are both present
+# here because an earlier bug shifted every column for exactly one of the two.
+LX="$(mktemp -d "${TMPDIR:-/tmp}/tmuxm-lx.XXXXXX")"
+cat > "$LX/netdev" <<'EOS'
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo:  232248    1000    0    0    0     0          0         0   232248    1000    0    0    0     0       0          0
+  wlo1: 5000000    4000    0    0    0     0          0         0  1000000    2000    0    0    0     0       0          0
+enp1s0: 7000000    6000    0    0    0     0          0         0  3000000    3000    0    0    0     0       0          0
+docker0: 900000     800    0    0    0     0          0         0   400000     500    0    0    0     0       0          0
+EOS
+# Only wlo1 and enp1s0 get a device symlink, which is what marks real hardware.
+mkdir -p "$LX/sys/wlo1/device" "$LX/sys/enp1s0/device" "$LX/sys/docker0" "$LX/sys/lo"
+lxsum() { TMUXM_OS=Linux TMUXM_PROC_NET_DEV="$LX/netdev" \
+  TMUXM_SYS_CLASS_NET="$1" bash -c '. "'"$REPO"'/bin/sampler.sh"; read_net_bytes'; }
+chk "physical only, bytes not packets" "$(lxsum "$LX/sys")"   "12000000 4000000"
+# An empty tree means no hardware exists — a container, where eth0 is itself a
+# veth. Nothing to double-count there, so everything but lo is summed.
+mkdir -p "$LX/empty"
+chk "container fallback sums non-lo"   "$(lxsum "$LX/empty")" "12900000 4400000"
+rm -rf "$LX"
+
+echo
+echo "=== 16. Memory is a fraction of real RAM ==="
+# The six vm_stat counters do not add up to physical RAM — roughly 0.6 GB of a
+# 16 GB machine sits outside them — so using their sum as the denominator
+# overstates every reading. hw.memsize is the honest total.
+VM="$(mktemp -d "${TMPDIR:-/tmp}/tmuxm-vm.XXXXXX")"; mkdir -p "$VM/bin"
+cat > "$VM/bin/vm_stat" <<'EOS'
+#!/bin/sh
+cat <<'EOF'
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                   10000.
+Pages active:                                100000.
+Pages inactive:                               40000.
+Pages speculative:                                0.
+Pages throttled:                                  0.
+Pages wired down:                             50000.
+Pages occupied by compressor:                 50000.
+EOF
+EOS
+printf '#!/bin/sh\n[ "$2" = "hw.memsize" ] && echo 8589934592 || exit 1\n' > "$VM/bin/sysctl"
+chmod +x "$VM/bin/vm_stat" "$VM/bin/sysctl"
+# used = active+wired+compressed = 200000 pages * 16384 = 3276800000 bytes
+# against hw.memsize 8589934592 -> 38%. The six-counter sum would say 80%.
+got="$(PATH="$VM/bin:$PATH" TMUXM_OS=Darwin \
+  bash -c '. "'"$REPO"'/bin/sampler.sh"; read_mem')"
+chk "used measured against hw.memsize" "$got" "38"
+rm -rf "$VM"
+
+echo
+echo "=== 17. render-bar normalises whatever the cache holds ==="
+# Two defects met here. The blocks were clamped and the number was not, so a
+# cache holding 150 drew four full blocks beside the caption "150%" — a bar
+# disagreeing with itself. And validating in bash is not enough: under `set -u`
+# a bare word in $(( )) is a fatal "abc: unbound variable" printed into the
+# status bar, "08" aborts just as hard because `test -gt` reads it as a bad
+# octal literal, and "010" would quietly mean 8.
+#
+# render-bar.sh derives its cache path from $USER, so overriding that gives this
+# section its own file — otherwise it races the sampler running this session,
+# which rewrites the real cache every interval.
+T17="tmuxmbar$$"; c17="/tmp/tmuxm-stats-${T17}"
+rb() { printf 'cpu %s\n' "$1" > "$c17"
+       USER="$T17" bash "$REPO/bin/render-bar.sh" cpu ff7361 2>"$c17.err" \
+         | sed 's/#\[[^]]*\]//g'; }
+chk "in range is untouched"       "$(rb 50)"   "██▁▁  50%"
+chk "above 100 clamps"            "$(rb 150)"  "████ 100%"
+chk "negative degrades"           "$(rb -5)"   "▁▁▁▁   0%"
+chk "non-numeric degrades"        "$(rb abc)"  "▁▁▁▁   0%"
+chk "leading zero is not octal"   "$(rb 010)"  "▄▁▁▁  10%"
+chk "08 does not abort"           "$(rb 08)"   "▃▁▁▁   8%"
+chk "overflow clamps"             "$(rb 99999999999999999999)" "████ 100%"
+chk "nothing written to stderr"   "$(cat "$c17.err")" ""
+: > "$c17"
+chk "missing key degrades"        "$(USER="$T17" bash "$REPO/bin/render-bar.sh" cpu ff7361 | sed 's/#\[[^]]*\]//g')" "▁▁▁▁   0%"
+rm -f "$c17" "$c17.err"
+
+echo "=== 18. Linux CPU counts stolen time as unavailable, not idle ==="
+# Steal is time the hypervisor gave to another guest. Leaving it out of the
+# total makes a contended VM look quiet: the same two snapshots read 10% with
+# it excluded and 25% with it counted.
+ST="$(mktemp -d "${TMPDIR:-/tmp}/tmuxm-st.XXXXXX")"
+printf 'cpu  100 0 0 900 0 0 0 0 0 0\n'    > "$ST/a"
+printf 'cpu  200 0 0 1800 0 0 0 200 0 0\n' > "$ST/b"
+got="$(TMUXM_OS=Linux bash -c '
+  . "'"$REPO"'/bin/sampler.sh"
+  TMUXM_PROC_STAT="'"$ST"'/a" read_cpu
+  TMUXM_PROC_STAT="'"$ST"'/b" read_cpu
+  echo "$CPU"')"
+chk "steal counted toward busy" "$got" "25"
+rm -rf "$ST"
 
 echo
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

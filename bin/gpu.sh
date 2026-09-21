@@ -50,7 +50,7 @@ gpu_all_suspended() {
 # whose GPU cannot be read — which is what makes the metric optional everywhere
 # else.
 gpu_sample() {
-  [ "$(uname -s)" = "Linux" ] || return 1
+  [ "${TMUXM_OS:-$(uname -s)}" = "Linux" ] || return 1
   command -v nvidia-smi >/dev/null 2>&1 || return 1
 
   # Parked: report idle without touching nvidia-smi, so the dGPU stays asleep.

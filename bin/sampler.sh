@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Long-lived stats sampler for the tmux status bar.
-# Samples cpu/mem/bat/gpu/net every INTERVAL seconds and atomically writes to
+# Samples cpu/mem/gpu/net every INTERVAL seconds and atomically writes to
 # /tmp/tmuxm-stats-$USER. Pidfile-guarded: only one sampler per user even
 # with multiple tmux servers attached.
 set -u
@@ -8,7 +8,9 @@ set -u
 INTERVAL=2
 CACHE="/tmp/tmuxm-stats-${USER}"
 PIDFILE="/tmp/tmuxm-sampler-${USER}.pid"
-OS="$(uname -s)"
+# Overridable so the suite can exercise the Linux readers on a macOS box and
+# vice versa; nothing but tests ever sets it.
+OS="${TMUXM_OS:-$(uname -s)}"
 
 # GPU detection, shared verbatim with install.sh so the two can never disagree
 # about whether this machine has one. Sourced relative to this script, which keeps
@@ -16,34 +18,6 @@ OS="$(uname -s)"
 # written and the bar is unaffected.
 _GPU_LIB="${BASH_SOURCE[0]%/*}/gpu.sh"
 [ -r "$_GPU_LIB" ] && . "$_GPU_LIB"
-
-# Single-instance guard. Creating the pidfile under `noclobber` is atomic;
-# test-then-write is not. Two tmux servers starting in the same instant would
-# both see no pidfile, both write, and both run — and the loser's PID would be
-# the one recorded, leaving an orphan that no later run can find or reap.
-claim_pidfile() { ( set -o noclobber; echo $$ > "$PIDFILE" ) 2>/dev/null; }
-
-if ! claim_pidfile; then
-  owner="$(cat "$PIDFILE" 2>/dev/null || true)"
-  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
-    exit 0                    # a live sampler already owns it
-  fi
-  rm -f "$PIDFILE"            # stale pidfile from a sampler that was killed -9
-  claim_pidfile || exit 0     # someone else won the retry; let them have it
-fi
-
-# Only clear the pidfile if it is still ours. A sampler that lost a race must
-# never delete the winner's claim.
-trap '[ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"' EXIT
-
-# update.sh stops the running sampler with SIGTERM before restarting it.
-# Handling it means we exit 0 rather than dying by the signal, so tmux stops
-# logging "'bash ~/.tmuxm/bin/sampler.sh' terminated by signal 15" — and, more
-# importantly, we exit *promptly*: update.sh only waits about a second for the
-# pidfile to clear, and a sampler still sitting in `sleep` past that window
-# makes the replacement think a live sampler is present and quietly give up,
-# leaving no sampler running at all.
-trap 'exit 0' TERM INT
 
 # Summing every interface double-counts. A packet to a container or over a VPN
 # crosses the overlay device (docker0, veth*, tun0, utun3) *and* the physical
@@ -56,8 +30,9 @@ trap 'exit 0' TERM INT
 # sub-interfaces — do not. Re-read each sample so hotplug (USB tethering, a
 # docked NIC) is picked up without restarting the sampler.
 linux_phys_ifaces() {
-  local d n out=""
-  for d in /sys/class/net/*; do
+  local d n root out=""
+  root="${TMUXM_SYS_CLASS_NET:-/sys/class/net}"   # overridable for the suite
+  for d in "$root"/*; do
     n="${d##*/}"
     [ "$n" = "*" ] && continue          # glob didn't match: no /sys/class/net
     [ -e "$d/device" ] && out="$out $n"
@@ -85,9 +60,17 @@ read_net_bytes() {
       # Address column entirely and shifts Ibytes/Obytes one field left. Every
       # interface left after the filter is real hardware, so it has a MAC and
       # the full column set.
+      #
+      # The name is normalised before it is tested, because netstat suffixes '*'
+      # to an interface that is not UP. Matching the raw field meant a skipped
+      # interface stopped being skipped the moment it went down, and its whole
+      # cumulative counter joined the sum — one interval then reported an entire
+      # session as instantaneous throughput. AirDrop makes that routine rather
+      # than rare: awdl0 cycles its radio constantly and carries ~13 MB.
       netstat -ibn 2>/dev/null | awk '
-        $3 ~ /^<Link/ &&
-        $1 !~ /^(lo|gif|stf|utun|ipsec|bridge|vmenet|ap|awdl|llw)[0-9]*$/ {
+        $3 ~ /^<Link/ {
+          name = $1; sub(/\*$/, "", name)
+          if (name ~ /^(lo|gif|stf|utun|ipsec|bridge|vmenet|ap|awdl|llw)[0-9]*$/) next
           ib += $7; ob += $10
         }
         END { print ib+0, ob+0 }
@@ -117,7 +100,7 @@ read_net_bytes() {
           ib += $2; ob += $10
         }
         END { print ib+0, ob+0 }
-      ' /proc/net/dev
+      ' "${TMUXM_PROC_NET_DEV:-/proc/net/dev}"
       ;;
     *)
       echo "0 0"
@@ -129,11 +112,16 @@ _PREV_CPU_IDLE=0
 _PREV_CPU_TOTAL=0
 
 # Linux: cumulative "idle total" tick counters from /proc/stat.
+#
+# Fields 2..9 are user, nice, system, idle, iowait, irq, softirq, steal. Steal is
+# time the hypervisor gave to another guest; leaving it out of the total made a
+# contended VM look quiet. guest (10) and guest_nice (11) are deliberately not
+# summed — the kernel already counts them inside user and nice.
 _linux_cpu_snapshot() {
   awk '/^cpu / {
-    t=0; for (i=2;i<=8;i++) t+=$i
+    t=0; for (i=2;i<=9;i++) t+=$i
     print $5, t
-  }' /proc/stat
+  }' "${TMUXM_PROC_STAT:-/proc/stat}"
 }
 
 # Sets the global CPU. Must NOT be called via $(...) — the Linux branch keeps
@@ -170,18 +158,22 @@ read_cpu() {
 read_mem() {
   case "$OS" in
     Darwin)
-      vm_stat 2>/dev/null | awk '
-        /Pages free/        {gsub(/[^0-9]/,"",$3); free=$3}
+      # Used is what Activity Monitor calls Memory Used: app memory, wired and
+      # whatever the compressor holds. The denominator is hw.memsize rather than
+      # the sum of the vm_stat counters, because those six do not add up to
+      # physical RAM — about 0.6 GB of a 16 GB machine sits outside them, and
+      # dividing by the smaller figure overstated every reading by ~3 points.
+      # Page size comes from vm_stat's own header, not a hardcoded 4096: Apple
+      # silicon uses 16384.
+      vm_stat 2>/dev/null | awk -v hw="$(sysctl -n hw.memsize 2>/dev/null)" '
+        NR==1 { if (match($0, /page size of [0-9]+/)) ps = substr($0, RSTART+13, RLENGTH-13) }
         /Pages active/      {gsub(/[^0-9]/,"",$3); active=$3}
-        /Pages inactive/    {gsub(/[^0-9]/,"",$3); inactive=$3}
-        /Pages speculative/ {gsub(/[^0-9]/,"",$3); spec=$3}
         /Pages wired/       {gsub(/[^0-9]/,"",$4); wired=$4}
         /Pages occupied by compressor/ {gsub(/[^0-9]/,"",$5); compr=$5}
         END {
-          total=free+active+inactive+spec+wired+compr
-          if (total==0) {print 0; exit}
+          if (hw+0 == 0 || ps+0 == 0) {print 0; exit}
           used=active+wired+compr
-          printf "%d", used*100/total
+          printf "%d", used*ps*100/hw
         }
       '
       ;;
@@ -194,19 +186,6 @@ read_mem() {
           printf "%d", (total-avail)*100/total
         }
       ' /proc/meminfo
-      ;;
-  esac
-}
-
-read_bat() {
-  case "$OS" in
-    Darwin)
-      pmset -g batt 2>/dev/null | grep -Eo '[0-9]+%' | head -1 | tr -d '%'
-      ;;
-    Linux)
-      for b in /sys/class/power_supply/BAT*; do
-        [ -r "$b/capacity" ] && { cat "$b/capacity"; return; }
-      done
       ;;
   esac
 }
@@ -227,18 +206,82 @@ $out
 EOF
 }
 
+# ── Library boundary ──────────────────────────────────────────
+# Everything above is a definition; everything below is startup — claiming the
+# pidfile, priming the counters, looping. The suite sources this file to drive
+# the readers against stubbed input, which only works if none of that runs.
+# Anything added below this line is startup, not a reader, and no test will be
+# able to reach it.
+#
+# The condition is how this file was invoked, not something the environment can
+# set. An env-var switch would mean one stray export in the tmux server's
+# environment disables the sampler permanently — no pidfile, no log line, a bar
+# that simply stops updating.
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0
+
+# Single-instance guard. Creating the pidfile under `noclobber` is atomic;
+# test-then-write is not. Two tmux servers starting in the same instant would
+# both see no pidfile, both write, and both run — and the loser's PID would be
+# the one recorded, leaving an orphan that no later run can find or reap.
+claim_pidfile() { ( set -o noclobber; echo $$ > "$PIDFILE" ) 2>/dev/null; }
+
+if ! claim_pidfile; then
+  owner="$(cat "$PIDFILE" 2>/dev/null || true)"
+  if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+    exit 0                    # a live sampler already owns it
+  fi
+  rm -f "$PIDFILE"            # stale pidfile from a sampler that was killed -9
+  claim_pidfile || exit 0     # someone else won the retry; let them have it
+fi
+
+# Only clear the pidfile if it is still ours. A sampler that lost a race must
+# never delete the winner's claim.
+trap '[ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"' EXIT
+
+# update.sh stops the running sampler with SIGTERM before restarting it.
+# Handling it means we exit 0 rather than dying by the signal, so tmux stops
+# logging "'bash ~/.tmuxm/bin/sampler.sh' terminated by signal 15" — and, more
+# importantly, we exit *promptly*: update.sh only waits about a second for the
+# pidfile to clear, and a sampler still sitting in `sleep` past that window
+# makes the replacement think a live sampler is present and quietly give up,
+# leaving no sampler running at all.
+trap 'exit 0' TERM INT
+
 # Baseline so the first delta isn't a huge spike
-prev_t=$(date +%s)
+next_t=$(date +%s)
+prev_t=$next_t
 read prev_ib prev_ob <<< "$(read_net_bytes)"
 # Prime Linux's delta counters (Darwin's iostat is self-priming)
 CPU=0
 [ "$OS" = "Linux" ] && read_cpu
 
 while :; do
+  # Sleep to the next deadline rather than for a fixed INTERVAL, so the time
+  # the readers spend is absorbed instead of added. On macOS read_cpu alone
+  # blocks ~1 s inside `iostat -c 2 -w 1`, which made the real period 3-4 s
+  # while tmux redrew the bar every 2 — the bar was reliably showing numbers
+  # older than the interval it advertised. The period this holds is
+  # max(INTERVAL, work + 1s), not INTERVAL flat.
+  #
+  # Clamped at both ends, because a deadline computed from the wall clock is
+  # not a duration:
+  #   - never below 1 s, or a sample that ever outran INTERVAL (a cold dGPU
+  #     woken by nvidia-smi, a stalled /proc read) would leave no idle gap at
+  #     all and spin for as long as the condition lasted — silently, on battery;
+  #   - never above INTERVAL, or a backward clock step (NTP correcting a drifted
+  #     RTC, a VM resuming) parks the sampler for however far the clock moved.
+  #     Simulated: a 1 h step back froze it for 3602 s. A forward step needs
+  #     nothing — the next dt is one long, honest average rather than a spike.
+  #
   # Backgrounded so a trapped signal interrupts `wait` immediately. A plain
   # `sleep` would defer the TERM handler until the sleep finished — measured at
   # up to INTERVAL seconds, which is longer than update.sh waits for us to go.
-  sleep "$INTERVAL" & wait $! 2>/dev/null || true
+  now=$(date +%s)
+  nap=$(( next_t + INTERVAL - now ))
+  (( nap < 1 ))        && nap=1
+  (( nap > INTERVAL )) && nap=$INTERVAL
+  next_t=$(( now + nap ))
+  sleep "$nap" & wait $! 2>/dev/null || true
   now=$(date +%s)
   read ib ob <<< "$(read_net_bytes)"
   dt=$(( now - prev_t )); (( dt <= 0 )) && dt=1
@@ -248,7 +291,6 @@ while :; do
 
   read_cpu; cpu=${CPU:-0}
   mem=$(read_mem); mem=${mem:-0}
-  bat=$(read_bat || true)
   read_gpu
 
   # A metric the machine does not have is omitted, never written as zero — a
@@ -263,7 +305,6 @@ while :; do
   {
     echo "cpu $cpu"
     echo "mem $mem"
-    [ -n "${bat:-}" ]  && echo "bat $bat"
     [ -n "${GPU:-}" ]  && echo "gpu $GPU"
     [ -n "${VRAM:-}" ] && echo "vram $VRAM"
     echo "net_in $net_in"
