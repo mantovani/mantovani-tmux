@@ -5,4 +5,5 @@
 
 # Built by install.sh from rust/ — never committed, every machine builds its own.
 bin/tmuxm
+bin/.tmuxm.new
 rust/target/

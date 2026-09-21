@@ -51,29 +51,20 @@ fn render(accent: &str, dim: &str) -> String {
     let now_ts = state::now();
     let prev = state::load();
 
-    // No previous sample — first render after boot, or after /tmp was cleared.
-    // The rates read 0 and correct themselves on the next refresh 2 s later.
-    let (cpu, net_in, net_out) = match &prev {
-        Some(p) if now_ts > p.ts => {
-            let elapsed = (now_ts - p.ts) as f64 / 1e9;
-            (
-                metrics::cpu_percent(&p.counters, &now_counters),
-                metrics::rate(p.counters.net_rx, now_counters.net_rx, elapsed),
-                metrics::rate(p.counters.net_tx, now_counters.net_tx, elapsed),
-            )
-        }
-        _ => (0, 0, 0),
-    };
+    // The rule lives in state::resolve so it can be tested without a clock or
+    // a filesystem — see the 3 ms case there.
+    let (rates, ts, counters) = state::resolve(prev.as_ref(), now_ts, &now_counters);
 
     // NVML costs ~21.7 ms in a fresh process, almost all of it mapping
     // libnvidia-ml.so — a cost a daemon pays once and a stateless binary would
     // pay every refresh. Reuse the last reading while it is fresh, so the GPU
     // is asked on roughly every third render instead of every one.
-    let reading = match prev.as_ref().and_then(|p| p.fresh_gpu(now_ts)) {
-        Some(cached) => cached,
+    let cached = prev.as_ref().and_then(|p| p.fresh_gpu(now_ts));
+    let reading = match cached {
+        Some(c) => c,
         None => gpu::sample(),
     };
-    let gpu_at = match prev.as_ref().and_then(|p| p.fresh_gpu(now_ts)) {
+    let gpu_at = match cached {
         Some(_) => prev
             .as_ref()
             .and_then(|p| p.gpu)
@@ -83,8 +74,9 @@ fn render(accent: &str, dim: &str) -> String {
     };
 
     state::save(&state::State {
-        ts: now_ts,
-        counters: now_counters,
+        ts,
+        counters,
+        rates: Some(rates),
         gpu: Some(state::GpuSample {
             at: gpu_at,
             reading,
@@ -100,12 +92,12 @@ fn render(accent: &str, dim: &str) -> String {
         accent,
         dim,
         &Metrics {
-            cpu,
+            cpu: rates.cpu,
             mem: metrics::mem_percent().unwrap_or(0),
             gpu,
             vram,
-            net_in,
-            net_out,
+            net_in: rates.net_in,
+            net_out: rates.net_out,
         },
     )
 }

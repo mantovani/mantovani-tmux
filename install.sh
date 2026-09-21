@@ -419,8 +419,13 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 mkdir -p "$REPO_DIR/bin"
 if cargo build --release --manifest-path "$REPO_DIR/rust/Cargo.toml" 2>&1 | sed 's/^/     /'; then
-  cp "$REPO_DIR/rust/target/release/tmuxm" "$REPO_DIR/bin/tmuxm"
-  chmod +x "$REPO_DIR/bin/tmuxm"
+  # Install by rename, not by copy. tmux runs bin/tmuxm every couple of
+  # seconds, and writing over a binary that is currently executing fails with
+  # ETXTBSY. A rename swaps the directory entry instead: anything mid-flight
+  # keeps the old inode and the next run picks up the new one.
+  cp "$REPO_DIR/rust/target/release/tmuxm" "$REPO_DIR/bin/.tmuxm.new"
+  chmod +x "$REPO_DIR/bin/.tmuxm.new"
+  mv -f "$REPO_DIR/bin/.tmuxm.new" "$REPO_DIR/bin/tmuxm"
   echo "[OK] Built bin/tmuxm ($("$REPO_DIR/bin/tmuxm" tz >/dev/null 2>&1 && echo working || echo "built, but not runnable"))"
 else
   echo "[!!] cargo build failed — see above. Minimum supported Rust is 1.75." >&2
