@@ -38,19 +38,79 @@ trap '[ "$(cat "$PIDFILE" 2>/dev/null)" = "$$" ] && rm -f "$PIDFILE"' EXIT
 # leaving no sampler running at all.
 trap 'exit 0' TERM INT
 
+# Summing every interface double-counts. A packet to a container or over a VPN
+# crosses the overlay device (docker0, veth*, tun0, utun3) *and* the physical
+# NIC it ultimately leaves through, so a naive total reports twice the real
+# throughput. Count only the hardware interfaces: overlay-only traffic is still
+# measured, because it has to cross a NIC to reach the network at all.
+
+# Linux: a netdev backed by real hardware has a /sys/class/net/<if>/device
+# symlink. Virtual ones — lo, docker0, veth*, br-*, bond0, tun0, wg0 and VLAN
+# sub-interfaces — do not. Re-read each sample so hotplug (USB tethering, a
+# docked NIC) is picked up without restarting the sampler.
+linux_phys_ifaces() {
+  local d n out=""
+  for d in /sys/class/net/*; do
+    n="${d##*/}"
+    [ "$n" = "*" ] && continue          # glob didn't match: no /sys/class/net
+    [ -e "$d/device" ] && out="$out $n"
+  done
+  printf '%s' "${out# }"
+}
+
 read_net_bytes() {
   case "$OS" in
     Darwin)
       # netstat -ibn cols: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Coll
       # The <Link#N> row holds the cumulative interface byte counters; other
       # rows are per-address subsets. Filter on $3 for stability.
+      #
+      # macOS has no /sys, and every virtual device still reports a hardware
+      # address, so there is no structural "is this real hardware" test to
+      # apply — the names are the only signal. Skip the overlay prefixes:
+      # utun/ipsec/gif/stf (VPN and tunnels), bridge/vmenet/ap (VM and
+      # internet-sharing bridges), awdl/llw (AirDrop/low-latency radios, which
+      # carry no internet traffic and whose bytes are already counted on the
+      # Wi-Fi interface they share).
+      #
+      # Skipping them also keeps the column numbers honest: a row for an
+      # interface with no link-layer address (lo0, utun*, gif*) omits the
+      # Address column entirely and shifts Ibytes/Obytes one field left. Every
+      # interface left after the filter is real hardware, so it has a MAC and
+      # the full column set.
       netstat -ibn 2>/dev/null | awk '
-        $3 ~ /^<Link/ && $1 != "lo0" { ib += $7; ob += $10 }
+        $3 ~ /^<Link/ &&
+        $1 !~ /^(lo|gif|stf|utun|ipsec|bridge|vmenet|ap|awdl|llw)[0-9]*$/ {
+          ib += $7; ob += $10
+        }
         END { print ib+0, ob+0 }
       '
       ;;
     Linux)
-      awk -F'[ :]+' 'NR>2 && $2!="lo" {ib+=$3; ob+=$11} END {print ib+0, ob+0}' /proc/net/dev
+      # /proc/net/dev right-pads the interface name into a 6-char column, so
+      # short names ("    lo:", "  wlo1:") arrive with leading whitespace and
+      # longer ones ("enp1s0:", "docker0:") do not. Splitting on /[ :]+/ made
+      # the field numbers depend on that padding: the leading separator created
+      # an empty $1 for short names but not for long ones, shifting every
+      # column by one and making us read RX/TX *packets* as bytes on exactly
+      # the interfaces that carry real traffic. Normalise instead: turn the
+      # name's colon into a space and let awk's default whitespace splitting
+      # handle the padding, so the columns are positional on every line.
+      #
+      # An empty `want` means no hardware interface exists — we are inside a
+      # container or a network namespace, where eth0 is itself a veth. There is
+      # nothing to double-count there, so fall back to summing every non-lo
+      # interface rather than reporting a flat zero.
+      awk -v want="$(linux_phys_ifaces)" '
+        BEGIN { filter = (want != "") }
+        NR>2 {
+          sub(/:/, " ")
+          if ($1 == "lo") next
+          if (filter && index(" " want " ", " " $1 " ") == 0) next
+          ib += $2; ob += $10
+        }
+        END { print ib+0, ob+0 }
+      ' /proc/net/dev
       ;;
     *)
       echo "0 0"
