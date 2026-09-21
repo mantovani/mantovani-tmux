@@ -252,6 +252,44 @@ hits="$(grep -nE '^[[:space:]]*set.*(status-style|status-left |status-right |win
 if [ -z "$hits" ]; then ok "tmux.conf sets no coloured options"; else bad "tmux.conf still defines colours:"; printf '%s\n' "$hits"; fi
 
 echo
+echo "=== 13b. Truecolor only where the terminal actually supports it ==="
+# The machine colour is a 24-bit value, so the RGB feature is what makes it
+# reproduce exactly — and granting it where it does not exist renders the colour
+# wrong rather than better. Apple Terminal is the one terminal that reports
+# xterm-256color while having no 24-bit support, so it is the one that must NOT
+# get it. Everything else must, including ssh, which forwards TERM but not the
+# COLORTERM that tmux would otherwise detect.
+tf_rgb() {   # tf_rgb <TERM_PROGRAM> <tag>
+  local h d sock feat over
+  # Throwaway HOME so the real tmux.conf can be run rather than a copy of its
+  # lines: ~/.tmuxm, ~/.tmux/plugins and ~/.tmux.local.conf are all absent
+  # there, so the sampler, TPM and the local colour block never load.
+  h="$(newhome)"
+  # -S with a short path, not -L: the default socket lives at
+  # TMUX_TMPDIR/tmux-UID/name, and under macOS's /var/folders TMPDIR that
+  # overruns sun_path's ~104 bytes — the server then never starts and every
+  # query below reports failure instead of an answer. Also keeps the real
+  # server out of reach without depending on TMUX_TMPDIR at all.
+  d="$(mktemp -d /tmp/tmuxm-sock.XXXXXX)"; sock="$d/s"
+  HOME="$h" TERM_PROGRAM="$1" \
+    tmux -S "$sock" -f "$REPO/tmux.conf" new-session -d -x 80 -y 24 sleep 30 2>/dev/null
+  feat="$(tmux -S "$sock" show -gv terminal-features 2>/dev/null | tr '\n' ' ')"
+  over="$(tmux -S "$sock" show -gv terminal-overrides 2>/dev/null | tr '\n' ' ')"
+  tmux -S "$sock" kill-server 2>/dev/null
+  rm -rf "$h" "$d"
+  # The effect, not the mechanism: tmux grants 24-bit colour through either the
+  # RGB feature or a Tc override, so matching only one would go green on a
+  # config that still forced the other.
+  case "$feat$over" in
+    *xterm*RGB*|*xterm*:Tc*) echo yes ;;
+    *)                       echo no  ;;
+  esac
+}
+chk "iTerm2 gets RGB"                "$(tf_rgb iTerm.app      a)" "yes"
+chk "Apple Terminal does not"        "$(tf_rgb Apple_Terminal b)" "no"
+chk "ssh (no TERM_PROGRAM) gets RGB" "$(tf_rgb ''             c)" "yes"
+
+echo
 echo "=== 14. GPU segments appear only where a GPU is detected ==="
 # install.sh decides ONCE, at install time, whether the bar carries GPU segments.
 # Both answers are forced with a stub on PATH and an empty sysfs tree, so this
