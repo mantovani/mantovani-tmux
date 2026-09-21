@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Render a 4-block bar + fixed-width percentage from the sampler cache.
-# Usage: render-bar.sh <cpu|mem|bat> <colour>
+# Usage: render-bar.sh <cpu|mem|bat|gpu|vram> <colour>
 #
 # Load is encoded by the HEIGHT of the blocks (▁▂▃▄▅▆▇█), not by colour: the bar
 # is the machine's colour at 1% and at 100%. One machine, one colour.
@@ -16,7 +16,7 @@ COLOR="${2:-}"
 CACHE="/tmp/tmuxm-stats-${USER}"
 
 if [ -z "$METRIC" ] || [ -z "$COLOR" ]; then
-  echo "usage: render-bar.sh <cpu|mem|bat> <colour>" >&2
+  echo "usage: render-bar.sh <cpu|mem|bat|gpu|vram> <colour>" >&2
   exit 1
 fi
 COLOR="#${COLOR#\#}"

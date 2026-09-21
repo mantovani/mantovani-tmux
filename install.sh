@@ -14,6 +14,12 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# GPU detection, shared verbatim with bin/sampler.sh. Whether this machine gets GPU
+# segments is decided here, once, and baked into the generated block — so a machine
+# without one produces byte-for-byte the block it always has.
+[ -r "$REPO_DIR/bin/gpu.sh" ] && . "$REPO_DIR/bin/gpu.sh"
+
 LINK="$HOME/.tmuxm"
 TARGET="$HOME/.tmux.conf"
 SOURCE="$LINK/tmux.conf"
@@ -230,7 +236,7 @@ block_exists() {
 # The whole theme. tmux.conf deliberately sets none of these — this block is the
 # single place the bar's colours are defined.
 write_color_block() {
-  local blockfile tmp ts rb rn accent_a
+  local blockfile tmp ts rb rn accent_a gpu_seg
   derive_theme "$COLOR_BASE"
 
   # --color-current overrides only the active shade; its text colour is still
@@ -251,6 +257,15 @@ write_color_block() {
   # happens to be safe, which makes this fail for only some colours.
   accent_a="${THEME_ACCENT#\#}"
 
+  # The one thing besides colour that varies per machine. Empty on a box with no
+  # readable GPU, and the status-right line below is then character-for-character
+  # the line this installer has always written — no placeholder, no flat 0% bar,
+  # nothing to notice.
+  gpu_seg=""
+  if command -v gpu_present >/dev/null 2>&1 && gpu_present; then
+    gpu_seg="#[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] GPU $rb gpu $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] VRAM $rb vram $accent_a) "
+  fi
+
   blockfile="$(mktemp "${TMPDIR:-/tmp}/tmuxm-block.XXXXXX")"
   trap 'rm -f "$blockfile"' RETURN
   cat > "$blockfile" <<EOF
@@ -263,7 +278,7 @@ set -g window-status-current-style "bg=$THEME_ACTIVE,fg=$THEME_ACTIVE_FG,bold"
 set -g pane-border-style "fg=$THEME_DIM"
 set -g pane-active-border-style "fg=$THEME_ACCENT"
 set -g status-left "#[bg=#000000,fg=$THEME_ACCENT,bold] 🧙 AI Wizard 🔮 #[bg=#000000,fg=white] "
-set -g status-right "#[bg=#000000,fg=$THEME_ACCENT] CPU $rb cpu $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] MEM $rb mem $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] ↓ $rn in) ↑ $rn out) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] @#h #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] %d/%m/%Y %H:%M $rz "
+set -g status-right "#[bg=#000000,fg=$THEME_ACCENT] CPU $rb cpu $accent_a) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] MEM $rb mem $accent_a) ${gpu_seg}#[fg=$THEME_DIM]│#[fg=$THEME_ACCENT] ↓ $rn in) ↑ $rn out) #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] @#h #[fg=$THEME_DIM]│#[fg=$THEME_ACCENT,bold] %d/%m/%Y %H:%M $rz "
 $END_MARK
 EOF
 

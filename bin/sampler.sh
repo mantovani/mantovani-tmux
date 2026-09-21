@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Long-lived stats sampler for the tmux status bar.
-# Samples cpu/mem/bat/net every INTERVAL seconds and atomically writes to
+# Samples cpu/mem/bat/gpu/net every INTERVAL seconds and atomically writes to
 # /tmp/tmuxm-stats-$USER. Pidfile-guarded: only one sampler per user even
 # with multiple tmux servers attached.
 set -u
@@ -9,6 +9,13 @@ INTERVAL=2
 CACHE="/tmp/tmuxm-stats-${USER}"
 PIDFILE="/tmp/tmuxm-sampler-${USER}.pid"
 OS="$(uname -s)"
+
+# GPU detection, shared verbatim with install.sh so the two can never disagree
+# about whether this machine has one. Sourced relative to this script, which keeps
+# the sampler location-independent; absent, the gpu/vram keys are simply never
+# written and the bar is unaffected.
+_GPU_LIB="${BASH_SOURCE[0]%/*}/gpu.sh"
+[ -r "$_GPU_LIB" ] && . "$_GPU_LIB"
 
 # Single-instance guard. Creating the pidfile under `noclobber` is atomic;
 # test-then-write is not. Two tmux servers starting in the same instant would
@@ -204,6 +211,22 @@ read_bat() {
   esac
 }
 
+# Sets GPU and VRAM, or leaves both empty on a machine without a readable GPU.
+# Globals rather than stdout because there are two values and splitting a string
+# back apart at the call site would be the only thing gained by printing.
+GPU=""
+VRAM=""
+read_gpu() {
+  GPU=""
+  VRAM=""
+  command -v gpu_sample >/dev/null 2>&1 || return 0
+  local out
+  out="$(gpu_sample)" || return 0
+  read -r GPU VRAM <<EOF
+$out
+EOF
+}
+
 # Baseline so the first delta isn't a huge spike
 prev_t=$(date +%s)
 read prev_ib prev_ob <<< "$(read_net_bytes)"
@@ -226,11 +249,23 @@ while :; do
   read_cpu; cpu=${CPU:-0}
   mem=$(read_mem); mem=${mem:-0}
   bat=$(read_bat || true)
+  read_gpu
 
+  # A metric the machine does not have is omitted, never written as zero — a
+  # renderer reading a missing key already falls back to 0, and writing it would
+  # be indistinguishable from a real idle reading.
+  #
+  # Order is load-bearing. The `&&` below binds to the exit status of the whole
+  # group, which is the status of its LAST command, and a guarded `[ -n … ] &&
+  # echo` returns 1 when the metric is absent. An optional key placed last would
+  # therefore skip the mv on exactly the machines that lack it, and freeze the
+  # cache for good. The two unconditional net lines have to stay at the end.
   {
     echo "cpu $cpu"
     echo "mem $mem"
-    [ -n "${bat:-}" ] && echo "bat $bat"
+    [ -n "${bat:-}" ]  && echo "bat $bat"
+    [ -n "${GPU:-}" ]  && echo "gpu $GPU"
+    [ -n "${VRAM:-}" ] && echo "vram $VRAM"
     echo "net_in $net_in"
     echo "net_out $net_out"
   } > "$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"

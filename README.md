@@ -16,12 +16,23 @@ Cross-platform (macOS & Linux).
 The black end-caps are fixed so the bar has a constant frame; everything drawn *on* them
 takes the machine colour.
 
+On a machine with an NVIDIA GPU, two more segments sit between `MEM` and the network:
+
+```
+ … │ MEM ███▂  79% │ GPU ██▂▁  54% │ VRAM ██▄▁  61% │ ↓ 99.3K ↑  1.9K │ …
+                     └── only where there is one ───┘
+```
+
+`GPU` is how busy it is, `VRAM` how full its memory is — `CPU`/`MEM` one level down, drawn
+the same way. Everywhere else the bar is **exactly** the one above: no segment, no
+placeholder, no flat `0%`. See [GPU and VRAM](#gpu-and-vram).
+
 | Segment | Colour |
 |---|---|
 | `🧙 AI Wizard 🔮` badge | the accent, bold, on black |
 | **Window list** | the machine colour; current window on the active shade |
 | Bar background | the machine colour |
-| CPU/MEM bars | the accent — the *same* at 1% and at 100% |
+| CPU/MEM/GPU/VRAM bars | the accent — the *same* at 1% and at 100% |
 | Net throughput | the accent. Fixed-width 6 chars (`    0B` / ` 99.3K` / `  1.2M`) |
 | `@host` | the accent, bold |
 | Date + UTC offset | the accent, bold. European `dd/mm/yyyy hh:mm`, then `-3 GMT` |
@@ -76,6 +87,54 @@ alive and writing the cache. Arguments are forwarded, so `update.sh --color rand
 
 `update.sh` never re-rolls a colour on its own — it forwards to `install.sh`, which only
 picks randomly when the machine has no colour yet.
+
+## GPU and VRAM
+
+Two extra segments, `GPU` (how busy it is) and `VRAM` (how full its memory is), drawn
+exactly like `CPU` and `MEM`. **Only on a machine that has a GPU** — everywhere else the
+bar is byte-for-byte the one it has always been.
+
+```bash
+nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv
+```
+
+is the whole source. That means **NVIDIA on Linux, and nothing else**: an Intel or AMD
+iGPU, a Mac, a card whose driver isn't loaded — all of them get today's bar. The iGPU
+case is deliberate rather than lazy; the readings its sysfs offers are clock frequencies,
+not utilisation, and a segment that means something different per machine is worse than no
+segment.
+
+**Presence is decided once, at install time,** and baked into the generated block — the
+same place, and for the same reason, as the colour. That is what makes the no-GPU bar
+*identical* rather than merely similar: there is no segment to hide, no `0%` to explain,
+and nothing extra runs every 2 seconds. The trade is that the bar reflects the hardware as
+of the last install, so a machine that gains a GPU needs one re-run:
+
+```bash
+~/.tmuxm/install.sh --color '#ff69b4'   # your existing colour; segments re-detected
+```
+
+`install.sh` and `bin/sampler.sh` share `bin/gpu.sh` rather than each testing for
+themselves. If they could disagree you would get a segment that is permanently flat.
+
+### A sleeping GPU is left asleep
+
+A Max-Q laptop dGPU parks in D3cold when idle. `nvidia-smi` **wakes it**, so polling every
+2 s would hold it awake for an entire session — real battery cost for a reading that is 0%
+anyway. So the sampler checks `power/runtime_status` on the NVIDIA PCI devices first, and
+reports idle without waking anything when they are all suspended. Desktops never
+runtime-suspend and take the direct path.
+
+The devices come from sysfs (`vendor 0x10de`, PCI class `03xx`) rather than from
+`nvidia-smi --query-gpu=pci.bus_id`, which prints an 8-digit domain (`00000000:01:00.0`)
+where sysfs writes four (`0000:01:00.0`).
+
+### Several cards, and cards that won't answer
+
+`GPU` is the **busiest** card (is anything running?) and `VRAM` is the **pooled** total
+(is there room left?). A card that cannot report a field prints `[N/A]`; rows count only
+when all three fields are numeric, and if none are, the metric is absent rather than
+invented — better a bar you don't have than a bar drawn from a string.
 
 ## The machine colour
 
@@ -138,7 +197,7 @@ only for drawing on black. `#ff69b4` (L=0.728) already clears it and is used unt
 
 ### Load is shown by height, not colour
 
-The CPU/MEM bars are the machine's colour at 1% and at 100%. Load is encoded by the height
+The CPU/MEM/GPU/VRAM bars are the machine's colour at 1% and at 100%. Load is encoded by the height
 of the blocks — `▁▂▃▄▅▆▇█` — which is a channel that survives every kind of colour-blindness,
 and keeps one machine looking like one colour.
 
@@ -195,20 +254,20 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 ```
                     once per machine, pidfile-guarded
                                 │
-            ┌───────────────────▼──────────────────┐
-            │ bin/sampler.sh                       │
-            │ samples cpu/mem/bat/net every 2 s    │
-            │ writes /tmp/tmuxm-stats-$USER (50 B) │
-            └───────────────────┬──────────────────┘
+            ┌───────────────────▼────────────────────┐
+            │ bin/sampler.sh                         │
+            │ samples cpu/mem/bat/gpu/net every 2 s  │
+            │ writes /tmp/tmuxm-stats-$USER (~60 B)  │
+            └───────────────────┬────────────────────┘
                                 │ atomic rename
                                 ▼
-              /tmp/tmuxm-stats-$USER  (key = value, 5 lines)
+              /tmp/tmuxm-stats-$USER  (key = value, 4–7 lines)
                                 │
             ┌───────────────────┴────────────────┐
             │                                    │
             ▼                                    ▼
    bin/render-bar.sh                    bin/render-net.sh
-   (cpu | mem | bat)                    (in | out)
+   (cpu|mem|bat|gpu|vram)               (in | out)
    ~2 ms per call                       ~2 ms per call
             │                                    │
             └──────────────► tmux status-right ◄─┘
@@ -230,7 +289,8 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
   read a consistent file.
 - **Cross-platform** — `sampler.sh` branches on `uname -s`:
   - Darwin: `iostat -c` (CPU), `vm_stat`, `pmset -g batt`, `netstat -ibn`
-  - Linux: `/proc/stat`, `/proc/meminfo`, `/sys/class/power_supply/BAT*`, `/proc/net/dev`
+  - Linux: `/proc/stat`, `/proc/meminfo`, `/sys/class/power_supply/BAT*`, `/proc/net/dev`,
+    optional `nvidia-smi`
 - **Fixed-width renders** — bars are always 4 chars + ` 999%` (9 chars total), throughput
   is always 6 chars. The status bar never jitters.
 - **The bin scripts are location-independent** — they only read and write `/tmp`, so the
@@ -247,7 +307,7 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 | `~/.tmux.local.conf` | **Per-machine colour + overrides** — not tracked in git |
 | `~/.tmux.local.conf.bak.<timestamp>` | Backup made the first time `--color` touches an existing file |
 | `~/.tmux/plugins/tpm/` | TPM (cloned by `install.sh`) |
-| `/tmp/tmuxm-stats-$USER` | Sampler cache (~50 bytes, 5 lines) |
+| `/tmp/tmuxm-stats-$USER` | Sampler cache (~60 bytes, 4–7 lines) |
 | `/tmp/tmuxm-sampler-$USER.pid` | Sampler pidfile |
 
 ## Requirements
@@ -259,11 +319,13 @@ Sampler-and-cache pattern (inspired by [samoshkin/tmux-plugin-sysstat][sysstat])
 | `git` | any | for the TPM clone |
 | macOS tools | `iostat`, `vm_stat`, `pmset`, `netstat` | all preinstalled |
 | Linux tools | `awk`, `cat`, `/proc`, optional `/sys/class/power_supply/` | preinstalled on any distro |
+| `nvidia-smi` | optional | only for the GPU/VRAM segments; ships with the NVIDIA driver |
 | `xclip` / `pbcopy` | optional | only if you add clipboard bindings to `~/.tmux.local.conf` |
 | Terminal | UTF-8, supports `▁▂▃▄▅▆▇█`, emoji | iTerm2 / WezTerm / Ghostty / Kitty / Alacritty / GNOME Terminal all fine |
 
 Battery is omitted automatically if `/sys/class/power_supply/BAT*` doesn't exist
-(desktops, VMs).
+(desktops, VMs) — though nothing draws it today, so that only shows up as a missing cache
+key. GPU is omitted the same way, but from the **bar itself**: see below.
 
 ## Resource usage
 
@@ -274,7 +336,7 @@ Steady-state on macOS (measured):
 | Sampler RSS | 1.7 MB |
 | Sampler CPU | ~240 ms per 2 s cycle (≈12 % of one core during the sample) |
 | Per-render cost | ~2 ms (vs ~190 ms for the previous per-refresh `top -l1`) |
-| Cache file | 50 bytes |
+| Cache file | 50–60 bytes |
 | Process count | 1 sampler regardless of how many tmux servers/clients |
 
 ## Keybinds (defaults from `tmux.conf`)
@@ -301,7 +363,8 @@ tmuxm/
 ├── test.sh                # test suite
 ├── bin/
 │   ├── sampler.sh         # background daemon, writes cache
-│   ├── render-bar.sh      # cpu/mem/bat → bar in the machine colour
+│   ├── gpu.sh             # NVIDIA detect + sample, shared with install.sh
+│   ├── render-bar.sh      # cpu/mem/bat/gpu/vram → bar in the machine colour
 │   ├── render-net.sh      # net throughput → fixed-width string
 │   └── render-tz.sh       # UTC offset → "-3 GMT"
 ├── .gitignore

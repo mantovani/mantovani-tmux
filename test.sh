@@ -25,6 +25,10 @@ run() { local h="$1"; shift; HOME="$h" TMUX_TMPDIR="$h/tmuxtmp" "$REPO/install.s
 ENGINE="$(sed -n '/^OKLCH_AWK=\$(cat <<.AWKEOF.$/,/^AWKEOF$/p' "$REPO/install.sh" | sed '1d;$d')"
 derive() { awk -v MODE=derive -v ACCENT="$1" "$ENGINE" </dev/null; }
 
+# The same detection install.sh uses, so tests expect what this machine actually
+# produces instead of assuming a GPU either way.
+. "$REPO/bin/gpu.sh"
+
 # WCAG relative luminance -> contrast against black.
 contrast_on_black() {
   awk -v C="$1" 'function hv(s,  i,c,v,d){v=0;for(i=1;i<=length(s);i++){c=tolower(substr(s,i,1));d=index("0123456789abcdef",c)-1;v=v*16+d}return v}
@@ -166,9 +170,12 @@ H="$(newhome)"
 for c in '#ff69b4' '#FBBF24' '#FF0000' 'random'; do
   run "$H" --color "$c" >/dev/null
   sr="$(awk '/^set -g status-right /{sub(/^set -g status-right "/,""); sub(/"$/,""); print}' "$H/.tmux.local.conf")"
-  # -o, not -c: both calls live on the same line, so -c would only ever say 1.
+  # -o, not -c: the calls all live on the same line, so -c would only ever say 1.
   args="$(printf '%s\n' "$sr" | grep -o "render-bar\.sh [a-z]* [0-9a-fA-F]\{6\})" | wc -l | tr -d ' ')"
-  chk "$c: both render-bar calls carry a clean hex arg" "$args" "2"
+  # cpu + mem always; gpu + vram only where this machine has a readable GPU, so
+  # the expectation has to follow the same detection the installer used.
+  want=2; gpu_present && want=4
+  chk "$c: every render-bar call carries a clean hex arg" "$args" "$want"
   if command -v tmux >/dev/null && tmux display-message -p "$sr" 2>/dev/null | grep -q '\*'; then
     bad "$c: tmux mangled the status-right"
   else
@@ -243,6 +250,81 @@ echo
 echo "=== 13. tmux.conf defines no colours (single source of truth) ==="
 hits="$(grep -nE '^[[:space:]]*set.*(status-style|status-left |status-right |window-status|pane-.*border|fg=#|bg=#)' "$REPO/tmux.conf" || true)"
 if [ -z "$hits" ]; then ok "tmux.conf sets no coloured options"; else bad "tmux.conf still defines colours:"; printf '%s\n' "$hits"; fi
+
+echo
+echo "=== 14. GPU segments appear only where a GPU is detected ==="
+# install.sh decides ONCE, at install time, whether the bar carries GPU segments.
+# Both answers are forced with a stub on PATH and an empty sysfs tree, so this
+# says the same thing on a box with a GPU and on one without.
+STUBS="$(mktemp -d "${TMPDIR:-/tmp}/tmuxm-stub.XXXXXX")"
+mkdir -p "$STUBS/yes" "$STUBS/no" "$STUBS/sysfs"
+printf '#!/bin/sh\necho "42, 2048, 8192"\n' > "$STUBS/yes/nvidia-smi"
+printf '#!/bin/sh\nexit 6\n'                > "$STUBS/no/nvidia-smi"
+chmod +x "$STUBS/yes/nvidia-smi" "$STUBS/no/nvidia-smi"
+
+# An empty sysfs tree means no device can be reported as runtime-suspended, so
+# the answer always comes from the stub rather than from the shortcut that
+# deliberately avoids waking a parked dGPU.
+srline() {  # srline <stubdir> <home>
+  NVIDIA_SYSFS_DIR="$STUBS/sysfs" PATH="$1:$PATH" HOME="$2" TMUX_TMPDIR="$2/tmuxtmp" \
+    "$REPO/install.sh" --color '#ff69b4' >/dev/null 2>&1
+  awk '/^set -g status-right /{sub(/^set -g status-right "/,""); sub(/"$/,""); print}' "$2/.tmux.local.conf"
+}
+
+H="$(newhome)"; with_gpu="$(srline "$STUBS/yes" "$H")"; rm -rf "$H"
+H="$(newhome)"; no_gpu="$(srline "$STUBS/no"  "$H")"; rm -rf "$H"
+
+chk "GPU present: gpu bar installed"  "$(printf '%s\n' "$with_gpu" | grep -c 'render-bar\.sh gpu ff69b4')"  "1"
+chk "GPU present: vram bar installed" "$(printf '%s\n' "$with_gpu" | grep -c 'render-bar\.sh vram ff69b4')" "1"
+chk "GPU present: labelled GPU"       "$(printf '%s\n' "$with_gpu" | grep -c ' GPU ')"                     "1"
+chk "GPU present: labelled VRAM"      "$(printf '%s\n' "$with_gpu" | grep -c ' VRAM ')"                    "1"
+chk "no GPU: no gpu bar"              "$(printf '%s\n' "$no_gpu"   | grep -c 'render-bar\.sh gpu ')"       "0"
+chk "no GPU: no vram bar"             "$(printf '%s\n' "$no_gpu"   | grep -c 'render-bar\.sh vram ')"      "0"
+chk "no GPU: no GPU/VRAM label"       "$(printf '%s\n' "$no_gpu"   | grep -Ec ' (GPU|VRAM) ')"             "0"
+
+echo
+echo "=== 14b. A GPU-less machine still generates exactly today's bar ==="
+# The whole point of deciding at install time. Not "similar", not "with a flat 0%
+# segment" — the identical string, pinned here so it cannot drift by accident.
+want='#[bg=#000000,fg=#ff69b4] CPU #(bash ~/.tmuxm/bin/render-bar.sh cpu ff69b4) #[fg=#7a004b]│#[fg=#ff69b4] MEM #(bash ~/.tmuxm/bin/render-bar.sh mem ff69b4) #[fg=#7a004b]│#[fg=#ff69b4] ↓ #(bash ~/.tmuxm/bin/render-net.sh in) ↑ #(bash ~/.tmuxm/bin/render-net.sh out) #[fg=#7a004b]│#[fg=#ff69b4,bold] @#h #[fg=#7a004b]│#[fg=#ff69b4,bold] %d/%m/%Y %H:%M #(bash ~/.tmuxm/bin/render-tz.sh) '
+chk "byte-for-byte the pre-GPU status-right" "$no_gpu" "$want"
+rm -rf "$STUBS"
+
+echo
+echo "=== 14c. render-bar reads gpu/vram, and tolerates their absence ==="
+# gpu and vram are optional keys: present on a GPU machine, missing everywhere
+# else. A renderer must not care which.
+cp "$CACHE" "$CACHE.testbak" 2>/dev/null
+printf 'cpu 7\nmem 55\ngpu 42\nvram 25\nnet_in 0\nnet_out 0\n' > "$CACHE"
+chk "gpu renders its own key"  "$(bash "$REPO/bin/render-bar.sh" gpu  aabbcc | sed 's/^#\[fg=[^]]*\]//; s/#\[fg=default,nobold\]$//')" "█▆▁▁  42%"
+chk "vram renders its own key" "$(bash "$REPO/bin/render-bar.sh" vram aabbcc | sed 's/^#\[fg=[^]]*\]//; s/#\[fg=default,nobold\]$//')" "█▁▁▁  25%"
+# Same cache a machine with no GPU writes: the keys are absent, not zeroed.
+printf 'cpu 7\nmem 55\nnet_in 0\nnet_out 0\n' > "$CACHE"
+chk "missing gpu key degrades to 0%"  "$(bash "$REPO/bin/render-bar.sh" gpu  aabbcc | sed 's/^#\[fg=[^]]*\]//; s/#\[fg=default,nobold\]$//')" "▁▁▁▁   0%"
+chk "missing vram key degrades to 0%" "$(bash "$REPO/bin/render-bar.sh" vram aabbcc | sed 's/^#\[fg=[^]]*\]//; s/#\[fg=default,nobold\]$//')" "▁▁▁▁   0%"
+[ -f "$CACHE.testbak" ] && mv "$CACHE.testbak" "$CACHE"
+
+echo
+echo "=== 14d. A parked dGPU is reported idle, not woken ==="
+# nvidia-smi wakes a suspended card. Polling it every 2 s would hold a Max-Q
+# laptop dGPU awake for the whole session, so the suspend check has to come first
+# — and the only way to prove it does is a stub that shouts when it runs.
+FAKE="$(mktemp -d "${TMPDIR:-/tmp}/tmuxm-fakesys.XXXXXX")"
+mkdir -p "$FAKE/dev/0000:01:00.0/power" "$FAKE/bin"
+printf '0x10de\n'    > "$FAKE/dev/0000:01:00.0/vendor"
+printf '0x030000\n'  > "$FAKE/dev/0000:01:00.0/class"
+printf '#!/bin/sh\necho WOKE-THE-GPU >&2\necho "99, 8000, 8188"\n' > "$FAKE/bin/nvidia-smi"
+chmod +x "$FAKE/bin/nvidia-smi"
+
+printf 'suspended\n' > "$FAKE/dev/0000:01:00.0/power/runtime_status"
+got="$(NVIDIA_SYSFS_DIR="$FAKE/dev" PATH="$FAKE/bin:$PATH" bash -c '. "'"$REPO"'/bin/gpu.sh"; gpu_sample' 2>"$FAKE/err")"
+chk "suspended: reports idle"        "$got"              "0 0"
+chk "suspended: nvidia-smi not run"  "$(cat "$FAKE/err")" ""
+
+printf 'active\n' > "$FAKE/dev/0000:01:00.0/power/runtime_status"
+got="$(NVIDIA_SYSFS_DIR="$FAKE/dev" PATH="$FAKE/bin:$PATH" bash -c '. "'"$REPO"'/bin/gpu.sh"; gpu_sample' 2>/dev/null)"
+chk "active: polled, util + pooled vram" "$got" "99 97"
+rm -rf "$FAKE"
 
 echo
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
