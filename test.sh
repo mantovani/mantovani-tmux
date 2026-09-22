@@ -217,7 +217,11 @@ echo
 echo "=== 12. The state file is what makes it stateless ==="
 if [ -x "$BIN" ]; then
   T12="tmuxmtest$$"
-  sf="/tmp/tmuxm-state-${T12}"
+  # Resolved the way the binary resolves it, not assumed. state::path() uses
+  # std::env::temp_dir(), which is $TMPDIR on macOS (/var/folders/...) and only
+  # falls back to /tmp when that is unset. Hardcoding /tmp meant these two
+  # assertions could never pass on a Mac.
+  sf="${TMPDIR:-/tmp}/tmuxm-state-${T12}"
   rm -f "$sf"
   first="$(USER="$T12" "$BIN" render ff69b4 7a004b | sed 's/#\[[^]]*\]//g')"
   if [ -r "$sf" ]; then ok "first render created $sf"; else bad "no state file written"; fi

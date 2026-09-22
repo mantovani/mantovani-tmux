@@ -7,7 +7,8 @@
 
 use crate::metrics::{self, Counters};
 use std::io::Write;
-use std::path::PathBuf;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 
 pub struct State {
     /// CLOCK_MONOTONIC nanoseconds. System-wide and unaffected by NTP, so it is
@@ -194,19 +195,119 @@ pub fn render(st: &State) -> String {
 /// a torn read. The temp name carries the pid so the two writers cannot collide
 /// on the temp file itself.
 pub fn save(st: &State) {
-    let final_path = path();
-    let tmp = final_path.with_extension(format!("tmp.{}", std::process::id()));
-    let ok = std::fs::File::create(&tmp)
-        .and_then(|mut f| f.write_all(render(st).as_bytes()))
-        .is_ok();
-    if ok && std::fs::rename(&tmp, &final_path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    let _ = write_atomic(&path(), &render(st));
+}
+
+/// Where the half-written file lives before the rename makes it visible.
+fn tmp_path(final_path: &Path) -> PathBuf {
+    final_path.with_extension(format!("tmp.{}", std::process::id()))
+}
+
+/// Write `body` so a reader sees either the old file or the new one, never a
+/// half of either.
+///
+/// `create_new`, not `create`: the state lives in a temp directory that is
+/// world-writable on Linux, and the temp name is derived from the user and the
+/// pid, so it is guessable. `File::create` is O_CREAT|O_TRUNC and *follows
+/// symlinks*, so anyone able to pre-create that path could have this process
+/// truncate and overwrite a file it owns. O_EXCL makes an existing path an
+/// error instead of a target. macOS is not exposed — its $TMPDIR is private per
+/// user — which is precisely why this would go unnoticed on the machine it was
+/// written on.
+///
+/// The rename needs no such care: rename(2) replaces a destination symlink
+/// rather than following it.
+fn write_atomic(final_path: &Path, body: &str) -> std::io::Result<()> {
+    let tmp = tmp_path(final_path);
+    let open = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+    };
+    let mut f = match open() {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // A crash between create and rename leaves a temp file behind, and
+            // pids are recycled, so refusing forever is not an option. Unlink
+            // does not follow symlinks, and the retry is still O_EXCL: if an
+            // attacker wins the gap and re-creates the path, this fails safely
+            // rather than writing through it.
+            std::fs::remove_file(&tmp)?;
+            open()?
+        }
+        other => other?,
+    };
+    f.write_all(body.as_bytes())?;
+    match std::fs::rename(&tmp, final_path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scratch directory of our own, so these never touch the real state file.
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("tmuxm-t-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The state file lives in a temp directory that is world-writable on Linux
+    /// (macOS gives each user a private $TMPDIR, which is why this would never
+    /// show up here). The temp name is derived from the user and the pid, so it
+    /// is guessable: another user can pre-create it as a symlink and have this
+    /// process truncate whatever it points at.
+    #[test]
+    fn a_pre_created_symlink_is_never_followed() {
+        let d = scratch("symlink");
+        let victim = d.join("victim");
+        std::fs::write(&victim, "untouched").unwrap();
+
+        let final_path = d.join("state");
+        std::os::unix::fs::symlink(&victim, tmp_path(&final_path)).unwrap();
+
+        let _ = write_atomic(&final_path, "state written through the link");
+
+        assert_eq!(
+            std::fs::read_to_string(&victim).unwrap(),
+            "untouched",
+            "the symlink was followed and someone else's file was overwritten"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Nothing here is secret, but a predictable world-readable file in a shared
+    /// directory is free to tighten.
+    #[test]
+    fn the_state_file_is_private_to_its_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = scratch("mode");
+        let final_path = d.join("state");
+        write_atomic(&final_path, "ts 1\n").unwrap();
+        let mode = std::fs::metadata(&final_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "state file is {mode:o}, expected 600");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A leftover temp file from a crashed run with a recycled pid must not wedge
+    /// saving for good.
+    #[test]
+    fn a_stale_temp_file_does_not_block_saving() {
+        let d = scratch("stale");
+        let final_path = d.join("state");
+        std::fs::write(tmp_path(&final_path), "leftover").unwrap();
+        write_atomic(&final_path, "fresh").unwrap();
+        assert_eq!(std::fs::read_to_string(&final_path).unwrap(), "fresh");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn sample(gpu: Option<GpuSample>) -> State {
         State {

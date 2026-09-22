@@ -18,6 +18,7 @@
 use super::darwin::{self, Iface};
 use super::Counters;
 use std::ffi::CStr;
+use std::ptr::addr_of;
 
 // <mach/host_info.h>. Not taken from libc, which does not expose the CPU
 // flavour on every version.
@@ -105,8 +106,18 @@ fn ifaces() -> Vec<Iface> {
     let mut out = Vec::new();
     let mut cur = head;
     // SAFETY: the list is well-formed until freeifaddrs; every dereference is
-    // null-checked, and ifa_data is only read as if_data64 for AF_LINK entries,
+    // null-checked, and ifa_data is only read as if_data for AF_LINK entries,
     // which is what the kernel puts there.
+    //
+    // if_data, NOT if_data64. getifaddrs(3) on macOS fills `struct if_data` —
+    // 96 bytes with 32-bit counters. if_data64 is 128 bytes and comes from
+    // sysctl(NET_RT_IFLIST2); reading one as the other puts ifi_ibytes on the
+    // wrong offset, where it reads a constant zero. That shipped: the bar
+    // showed 0 B/s through a 40 MB download while en0 really moved 31 MB.
+    //
+    // Both structs are #[repr(packed)], so every field is copied out with
+    // read_unaligned rather than referenced — taking a reference to a packed
+    // field is undefined behaviour even if it is never dereferenced.
     unsafe {
         while !cur.is_null() {
             let e = &*cur;
@@ -117,16 +128,16 @@ fn ifaces() -> Vec<Iface> {
             if i32::from((*e.ifa_addr).sa_family) != libc::AF_LINK {
                 continue;
             }
-            let dl = &*(e.ifa_addr as *const libc::sockaddr_dl);
-            let data = &*(e.ifa_data as *const libc::if_data64);
+            let dl = e.ifa_addr as *const libc::sockaddr_dl;
+            let data = e.ifa_data as *const libc::if_data;
             let Ok(name) = CStr::from_ptr(e.ifa_name).to_str() else {
                 continue;
             };
             out.push(Iface {
                 name: name.to_string(),
-                if_type: dl.sdl_type,
-                rx: data.ifi_ibytes,
-                tx: data.ifi_obytes,
+                if_type: addr_of!((*dl).sdl_type).read_unaligned(),
+                rx: u64::from(addr_of!((*data).ifi_ibytes).read_unaligned()),
+                tx: u64::from(addr_of!((*data).ifi_obytes).read_unaligned()),
             });
         }
         libc::freeifaddrs(head);
@@ -142,5 +153,42 @@ pub fn counters() -> Counters {
         cpu_total,
         net_rx,
         net_tx,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The layer that shipped broken: pure arithmetic lives in `darwin.rs` and
+    /// is covered from any host, so nothing exercised the structs these
+    /// syscalls fill. Reading `ifa_data` as the wrong type is invisible to a
+    /// unit test and to `cargo clippy`, and it survived CI on macos-latest.
+    ///
+    /// Asserts against the kernel rather than a fixture: any machine running
+    /// this has moved bytes over some interface since boot, and a counter that
+    /// reads zero across the board is the signature of that bug.
+    #[test]
+    fn getifaddrs_yields_real_counters() {
+        let all = ifaces();
+        assert!(!all.is_empty(), "getifaddrs returned nothing at all");
+        assert!(
+            all.iter().any(|i| i.rx > 0),
+            "every interface reported rx=0 — ifa_data is being read as the \
+             wrong struct (if_data64 instead of if_data)"
+        );
+        // lo0 always has traffic and is never physical, so it proves the walk
+        // sees counters even when the filter later discards them.
+        assert!(
+            all.iter().any(|i| i.name == "lo0" && i.rx > 0),
+            "lo0 had no counters; the walk is not reading if_data correctly"
+        );
+    }
+
+    /// mem_percent is arithmetic over values only a Mac can supply.
+    #[test]
+    fn memory_reads_a_plausible_percentage() {
+        let pct = mem_percent().expect("host_statistics64/sysctl failed");
+        assert!(pct > 0 && pct <= 100, "implausible memory reading: {pct}");
     }
 }

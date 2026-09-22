@@ -66,12 +66,56 @@ pub fn rate(prev: u64, now: u64, elapsed: f64) -> u64 {
     if elapsed <= 0.0 {
         return 0;
     }
-    (now.saturating_sub(prev) as f64 / elapsed) as u64
+    (delta(prev, now) as f64 / elapsed) as u64
+}
+
+/// Bytes moved between two counter readings, allowing for one 32-bit wrap.
+///
+/// macOS hands out 32-bit interface counters (`if_data`), so a busy link rolls
+/// over every 4 GB — en0 on the machine this was written on had wrapped eight
+/// times. Treating the drop as "no traffic" published a 0 B/s sample mid-
+/// transfer; `netstat` avoids it by accumulating wraps in userspace, and this
+/// is the same correction in one line.
+///
+/// A reset is told apart from a wrap by where the previous reading sat: only a
+/// counter already near the top of the 32-bit range can roll over. An
+/// interface that reloads its driver restarts from zero, and its previous
+/// value is usually nowhere near the boundary — that stays a reset and reports
+/// nothing, which is what `cpu_degrades_rather_than_spikes` asks of the CPU
+/// path too. A reset that happens to strike while the counter was in the upper
+/// half is still indistinguishable, and costs one overstated sample.
+///
+/// Linux counters are 64-bit and never reach this path.
+fn delta(prev: u64, now: u64) -> u64 {
+    const WRAP: u64 = 1 << 32;
+    if now >= prev {
+        now - prev
+    } else if (WRAP / 2..WRAP).contains(&prev) {
+        (now + WRAP) - prev
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_counter_that_wraps_is_not_read_as_silence() {
+        // Ordinary forward movement.
+        assert_eq!(delta(100, 500), 400);
+        assert_eq!(rate(0, 2048, 2.0), 1024);
+        // 32-bit rollover: 100 bytes before the boundary, 60 after.
+        let just_under = (1u64 << 32) - 100;
+        assert_eq!(delta(just_under, 60), 160);
+        // Without the correction this was saturating_sub -> 0, publishing a
+        // 0 B/s reading in the middle of a transfer.
+        assert_eq!(rate(just_under, 60, 2.0), 80);
+        // A small counter going backwards is a reset, not a wrap: nothing at
+        // 5000 bytes can have rolled over a 32-bit boundary.
+        assert_eq!(delta(5000, 1000), 0);
+    }
 
     fn c(idle: u64, total: u64) -> Counters {
         Counters {
