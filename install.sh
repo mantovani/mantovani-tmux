@@ -342,11 +342,31 @@ if [ -z "$COLOR_ARG" ] && [ -n "$COLOR_CURRENT_ARG" ]; then
   exit 1
 fi
 
-# No --color: generate one, but ONLY on a machine that has none yet. update.sh
+# Recover the colour this machine already chose, from the block's own header.
+# write_color_block records it as "# Machine colour: #rrggbb", so the block is
+# its own source of truth and nothing has to be stored twice.
+stored_color() {
+  [ -r "$LOCAL_CONF" ] || return 1
+  awk '/^# Machine colour:/ {print $4; exit}' "$LOCAL_CONF" | grep -qE '^#[0-9a-fA-F]{6}$' \
+    && awk '/^# Machine colour:/ {print $4; exit}' "$LOCAL_CONF"
+}
+
+# No --color: generate one on a machine that has none yet, and otherwise reuse
+# the one already recorded. Both paths end with COLOR_ARG set, so the block is
+# rewritten on every install.
+#
+# Rewriting matters as much as not re-rolling. The colour is sticky — update.sh
 # forwards its arguments here, so a bare `update.sh` must never repaint a colour
-# you already have.
-if [ -z "$COLOR_ARG" ] && ! block_exists; then
-  COLOR_ARG="random"
+# you already have — but the *body* of the block is generated code, and leaving
+# it alone is how an upgrade breaks. The shell version's block invoked
+# bin/render-bar.sh; those scripts are gone, so a bare install that declined to
+# rewrite left the bar calling nothing at all.
+if [ -z "$COLOR_ARG" ]; then
+  if block_exists && COLOR_ARG="$(stored_color)" && [ -n "$COLOR_ARG" ]; then
+    :                       # reuse what this machine already picked
+  else
+    COLOR_ARG="random"      # no block, or one with no readable colour in it
+  fi
 fi
 
 [ -n "$COLOR_ARG" ] && resolve_color "$COLOR_ARG"

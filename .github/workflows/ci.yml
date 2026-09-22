@@ -37,9 +37,23 @@ jobs:
       - run: cargo check --manifest-path rust/Cargo.toml --target ${{ matrix.target }}
 
   suite:
-    runs-on: ubuntu-latest
+    # Both platforms, because the shell suite makes assumptions the two do not
+    # share. It hardcoded /tmp for the state file, which is where the binary
+    # writes on Linux and never where it writes on macOS ($TMPDIR, under
+    # /var/folders) — so two tests could not pass on a Mac, and running this job
+    # on Linux alone is why nobody found out.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y tmux
+      - run: rustup toolchain install 1.75 --profile minimal
+      - run: rustup default 1.75
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - if: runner.os == 'macOS'
+        run: brew install tmux
       - run: ./install.sh --color '#ff69b4'
       - run: ./test.sh

@@ -7,3 +7,7 @@
 bin/tmuxm
 bin/.tmuxm.new
 rust/target/
+
+# Not ours — a stray database that lands in the working tree and would
+# otherwise be swept up by `git add -A`.
+ruvector.db

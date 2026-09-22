@@ -174,6 +174,25 @@ after="$(awk '/^# Machine colour:/{print $4}' "$H/.tmux.local.conf")"
 if [ "$before" != "$after" ]; then ok "--color random re-rolls ($before → $after)"; else bad "--color random did not change it"; fi
 
 echo
+echo "=== 7b. An upgrade refreshes the block it already wrote ==="
+# Sticky colour must not mean a stale block. Upgrading from the shell version
+# leaves a managed block that still invokes bin/render-bar.sh, and those scripts
+# are gone — so a bare install that declines to rewrite it leaves the bar
+# calling nothing. The colour is the thing that must survive an upgrade, not the
+# body of the block.
+H7="$(newhome)"
+run "$H7" --color '#3366cc' >/dev/null
+# Put the block back the way the shell version wrote it.
+sed -i.bak 's|#(~/.tmuxm/bin/tmuxm render [^)]*)|#(bash ~/.tmuxm/bin/render-bar.sh cpu 3366cc)|' \
+  "$H7/.tmux.local.conf" && rm -f "$H7/.tmux.local.conf.bak"
+chk "precondition: block is stale"  "$(grep -c 'render-bar\.sh' "$H7/.tmux.local.conf")" "1"
+run "$H7" >/dev/null          # a bare upgrade, exactly what update.sh runs
+chk "bare install refreshed the block" "$(grep -c 'render-bar\.sh' "$H7/.tmux.local.conf")" "0"
+chk "and it now calls the binary"      "$(grep -c 'bin/tmuxm render' "$H7/.tmux.local.conf")" "1"
+chk "while keeping the machine colour" "$(awk '/^# Machine colour:/{print $4}' "$H7/.tmux.local.conf")" "#3366cc"
+rm -rf "$H7"
+
+echo
 echo "=== 8. Idempotence + unmanaged lines survive ==="
 run "$H" --color '#ff69b4' >/dev/null
 printf '\nbind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel xclip\n' >> "$H/.tmux.local.conf"

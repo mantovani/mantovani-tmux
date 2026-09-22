@@ -269,7 +269,7 @@ One binary, run by tmux on its own refresh. There is no background process.
         ├──► bin/tmuxm render <accent> <dim>          ~1.6 ms
         │      ├─ /proc/stat, /proc/meminfo, /proc/net/dev      0.08 ms
         │      ├─ NVML, when the cached reading has expired    ~21.7 ms
-        │      ├─ diff against /tmp/tmuxm-state-$USER  (monotonic ns)
+        │      ├─ diff against $TMPDIR/tmuxm-state-$USER (monotonic ns)
         │      └─ print the metric block, exit
         │
         └──► bin/tmuxm tz                             ~0.8 ms
@@ -290,7 +290,9 @@ deadline-based sleep at both ends so a backward clock step could not park it.
 Every one of those mechanisms was there to keep a process alive so it could
 remember four numbers.
 
-`/tmp/tmuxm-state-$USER` remembers them instead:
+A state file remembers them instead — `$TMPDIR/tmuxm-state-$USER`, which is
+`/tmp` on Linux and a private per-user directory under `/var/folders` on
+macOS:
 
 ```
 ts 103428778033098     ← CLOCK_MONOTONIC nanoseconds
@@ -373,7 +375,7 @@ type and two integers.
 | `~/.tmux.local.conf` | **Per-machine colour + overrides** — not tracked in git |
 | `~/.tmux.local.conf.bak.<timestamp>` | Backup made the first time `--color` touches an existing file |
 | `~/.tmux/plugins/tpm/` | TPM (cloned by `install.sh`) |
-| `/tmp/tmuxm-state-$USER` | Previous sample (~8 lines); recreated if deleted |
+| `$TMPDIR/tmuxm-state-$USER` | Previous sample (~8 lines); recreated if deleted. `/tmp` on Linux, `/var/folders/...` on macOS |
 
 ## Requirements
 
